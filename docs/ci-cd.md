@@ -7,6 +7,7 @@
 | CI | `.github/workflows/ci.yml` | every PR, push to `main`, and as a reusable workflow called from Release | lint, typecheck, unit tests, package build, workflow security scan |
 | Release | `.github/workflows/release.yml` | push to `main` | run CI, then (if CI passes) version bump, changelog, git tag, floating major tag, PyPI publish, SBOM generation, artifact attestation |
 | Security | `.github/workflows/security.yml` | every PR, push to `main`, weekly schedule | dependency-vulnerability scanning (pip-audit), static code analysis (CodeQL: Python + Actions), a second, weekly zizmor pass -- advisory/reporting, not PR-blocking (see below) |
+| Policy Audit | `.github/workflows/policy-audit.yml` | daily schedule, push to `main` touching the policy file or itself, manual dispatch | read-only `repo-policy audit` against this repo's own `.github/repository-policy.yml` (Task 9 dogfooding) -- reports drift, never mutates; not PR-blocking |
 
 The pre-gating version of both workflows ran green on real GitHub Actions runners, not just
 locally (see `docs/test-strategy.md` for the project's general stance on real-vs-mocked

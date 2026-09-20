@@ -3,12 +3,26 @@
 # Enforcement choice (main): `branch_protection`, not `ruleset`. ADR-0004 and Task 1 of the
 # audit-remediation plan made `ruleset` the more actively-hardened mechanism (effective-ruleset
 # applicability, canonical `repo-policy:<branch>` ownership naming, no bypass actors), and it would
-# otherwise be the preferred choice for dogfooding. But `required_conversation_resolution` below
-# has no GitHub Rulesets equivalent (src/repo_policy/models.py's FIELD_SPECS/
-# _RULESET_UNSUPPORTED_FIELDS, enforced by BranchPolicy._reject_ruleset_unsupported_fields) --
-# `enforcement: ruleset` with this field set fails `repo-policy validate` outright. Conversation
-# resolution is a non-negotiable requirement here, so `branch_protection` is the only schema-valid
-# choice that satisfies it, not a stylistic fallback.
+# otherwise be the preferred choice for dogfooding. Two fields declared below independently rule it
+# out, though -- either one alone is already enough to force `branch_protection` (confirmed by
+# testing each in isolation with `repo-policy validate`, not just read from source):
+#
+#   - `required_conversation_resolution: true` -- no GitHub Rulesets equivalent at all.
+#   - `enforce_admins: true` -- also no Rulesets equivalent, for a concrete reason: repo-policy's
+#     ruleset backend hardcodes `bypass_actors: []` on every apply, unconditionally
+#     (`src/repo_policy/policies/rulesets.py`'s `to_api_payload` -- "canonical, always-active,
+#     exactly-scoped, no-bypass shape"), with no modeled field to set it otherwise. Rulesets
+#     express "no admin exemption" via an empty bypass-actors list, which repo-policy's backend
+#     already always produces -- so `enforce_admins: true`'s *intent* is actually satisfied by
+#     `ruleset` today. But there's no way to declare it, or the opposite (`enforce_admins: false`,
+#     a live toggle under branch_protection), so the schema rejects the field outright rather than
+#     silently ignore a value it can't act on either way (`src/repo_policy/models.py`'s
+#     `_RULESET_UNSUPPORTED_FIELDS`, enforced by `BranchPolicy._reject_ruleset_unsupported_fields`).
+#
+# Both are non-negotiable requirements here (see this file's inline comments on each), so
+# `branch_protection` is the only schema-valid choice that satisfies them, not a stylistic
+# fallback. If either requirement is ever dropped, re-check the *other* one too before assuming
+# `ruleset` becomes viable -- don't re-derive this from source next time, this is the answer.
 #
 # `signed_commits` is deliberately left unset (not `true`) on every branch below. The plan's Task 9
 # entry requires Tasks 1, 2, 6, and 10 complete before enabling it; Task 10 (dedicated release-bot
@@ -45,14 +59,17 @@ branches:
     allow_force_push: false
     allow_deletion: false
 
-    # Admins (today: the sole maintainer) ARE exempt from the rules above -- deliberate, not an
-    # oversight. With exactly one maintainer, enforce_admins: true means losing the ability to
-    # push directly to main at all (no second person exists to approve a PR), turning every fix,
-    # including trivial ones, into a mandatory detour through the "Emergency recovery" procedure
-    # in SECURITY.md. PR requirements, the required status check, and conversation resolution
-    # still apply to everyone else. Revisit and flip to true once a second active maintainer
-    # joins -- see SECURITY.md's threat model on why that matters.
-    enforce_admins: false
+    # Admins (today: the sole maintainer) are NOT exempt from the rules above -- deliberate, not
+    # an oversight, and cheaper than it first looks. enforce_admins: true means no direct
+    # `git push` to main for anyone, including the maintainer -- everything goes through a PR. But
+    # approvals: 0 is already set above, so the maintainer can self-merge their own PR the instant
+    # `CI / required` goes green -- there is no second-approver wait to sit through. The real cost
+    # is narrow: you're only genuinely blocked when CI itself is broken, which is exactly what the
+    # "Emergency recovery" procedure in SECURITY.md exists for. The payoff: force-push protection,
+    # deletion protection, and the required CI check all apply to admin-level access too -- no
+    # silent exemption for whoever holds the credentials, even if those credentials are ever
+    # compromised, consistent with this being a security-governance tool's own repo.
+    enforce_admins: true
     required_conversation_resolution: true
     lock_branch: false
     # false pairs with lock_branch: false above -- BranchPolicy rejects allow_fork_syncing: true
@@ -69,9 +86,8 @@ repo_settings:
   vulnerability_alerts: true
   automated_security_fixes: true
   private_vulnerability_reporting: true
-  # Closes the two gaps SECURITY.md's "Repository Settings Not Yet Enabled" section documents as
-  # open action items -- this policy is what turns them on once applied (see docs/ci-cd.md /
-  # SECURITY.md for why they weren't on already: they need repo-admin access this codebase change
-  # alone can't grant).
+  # Declares the two settings SECURITY.md's "Repository Settings Declared, Pending First `apply`"
+  # section tracks -- this policy is what turns them on the first time `repo-policy apply` runs
+  # against this repository (needs repo-admin credentials this codebase change alone can't grant).
   secret_scanning: true
   secret_scanning_push_protection: true

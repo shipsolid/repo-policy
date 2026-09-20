@@ -72,6 +72,7 @@ restrict itself to a subset. This is why token scoping (above) is the primary co
 | Workflow YAML security | `zizmor --pedantic` | Every PR, every push to `main` (`ci.yml`'s `security` job, PR-blocking), weekly again (`security.yml`, advisory) | `.github/workflows/*.yml` |
 | Container image vulnerabilities | Trivy (Task 7) | Every PR, every push to `main` (`ci.yml`'s `docker` job) | The Docker Action image, `CRITICAL` blocking / `CRITICAL,HIGH` reported |
 | Dependency update proposals | Dependabot (`.github/dependabot.yml`) | Weekly, grouped per ecosystem (`pip`, `github-actions`, `docker`), with a 7-day cooldown before a newly-published version is proposed | Every dependency this project or its Docker image declares |
+| Repository-policy compliance | `repo-policy audit` | Daily, plus push to `main` touching the policy file or itself, plus manual dispatch (`.github/workflows/policy-audit.yml`, read-only) | This repository's own live branch protection / security settings vs. `.github/repository-policy.yml` (Task 9 dogfooding, see README's "Self-governance") |
 
 `security.yml`'s pip-audit/zizmor/CodeQL jobs are advisory, not PR-blocking -- they are not part of
 `ci.yml`'s `required` check. `ci.yml`'s own narrower `security` job (zizmor over workflow YAML
@@ -182,35 +183,42 @@ What you *can* verify for a specific release's Docker image, without trusting an
   attestations (Sigstore-backed build provenance) for the wheel, sdist, both SBOMs, and the Docker
   image. See "Verifying release artifacts" above.
 
-## Repository Settings Not Yet Enabled
+## Repository Settings Declared, Pending First `apply`
 
-The following are GitHub repository-settings toggles (Settings → Code security), not something
-expressible in a workflow file — recorded here as an open action item rather than silently
-skipped:
+The following GitHub repository-settings toggles (Settings → Code security) are now declared in
+[`.github/repository-policy.yml`](.github/repository-policy.yml)'s `repo_settings` block
+(`secret_scanning: true`, `secret_scanning_push_protection: true`) but not yet live on
+`shipsolid/repo-policy` — they take effect the first time `repo-policy apply` runs against this
+repository, which has not happened yet (see README's "Self-governance"). Recorded here as an open
+action item, not silently skipped, until that first apply completes:
 
-- **Secret scanning** — Settings → Code security → Secret scanning → Enable. Flags secrets
-  matching known provider patterns that get committed to the repository.
-- **Push protection** — same page, enabled after secret scanning is on. Blocks a `git push`
-  containing a detected secret before it ever lands in the repository's history, rather than only
-  flagging it after the fact.
+- **Secret scanning** — flags secrets matching known provider patterns that get committed to the
+  repository.
+- **Push protection** — enabled after secret scanning is on. Blocks a `git push` containing a
+  detected secret before it ever lands in the repository's history, rather than only flagging it
+  after the fact.
 
 Both are available on public repositories at no cost, and on private repositories with GitHub
-Advanced Security. Neither is enabled by anything in this repository's version-controlled
-configuration — enabling them requires repository-admin access to the GitHub UI (or the REST API's
-`PATCH /repos/{owner}/{repo}` `security_and_analysis` field, the same endpoint `repo-policy`
-itself already manages other `security_and_analysis` sub-settings through — see
-`github_client.py`'s `update_security_and_analysis`). Turning these two on for
-`shipsolid/repo-policy` itself is an action item for whoever holds admin access, not something
-this codebase change can complete.
+Advanced Security. `repo-policy` manages both through the REST API's `PATCH /repos/{owner}/{repo}`
+`security_and_analysis` field (see `github_client.py`'s `update_security_and_analysis`) — the same
+mechanism it uses for every other declared `repo_settings` toggle. Turning them on for
+`shipsolid/repo-policy` itself now requires running `repo-policy apply` with sufficient credentials
+(repository-admin / fine-grained `Administration: Read and write`), not a separate manual UI step.
 
 ## Emergency Recovery
 
-`.github/repository-policy.yml` declares `main` with `enforce_admins: true` and no bypass actors
-(`clear_restrictions: true`) — nobody, including the repository owner, is exempted from requiring
-a passing `CI / required` status check to merge. That is deliberate (see Threat Model above), but
-it creates one failure mode this policy cannot resolve on its own: if `CI / required` itself
-becomes permanently unable to pass — a broken step in `ci.yml`, an expired/revoked pinned Action,
-a GitHub Actions outage — no PR can merge, including the PR that would fix the breakage.
+`.github/repository-policy.yml` declares `main` with `enforce_admins: true` — nobody, including
+the repository owner, is exempted from requiring a passing `CI / required` status check to merge —
+and `clear_restrictions: true`, which resets any push-restriction allowlist GitHub might already
+hold for the branch. That second field is a narrower guarantee than "no bypass actors": it does
+not touch `bypass_pull_request_allowances`, a separate GitHub setting that lets specific actors
+skip required PR-approval counts, which `repo-policy` reads through from whatever is already live
+on GitHub rather than clearing (`src/repo_policy/policies/pull_requests.py`) — a human-set
+allowance there would silently survive every `apply`. This combination is deliberate (see Threat
+Model above), but it creates one failure mode this policy cannot resolve on its own: if
+`CI / required` itself becomes permanently unable to pass — a broken step in `ci.yml`, an
+expired/revoked pinned Action, a GitHub Actions outage — no PR can merge, including the PR that
+would fix the breakage.
 
 There is no policy field for "allow a bypass under condition X"; recovering from this is a manual,
 audited, time-boxed repository-settings change, not something `repo-policy` itself performs:

@@ -19,8 +19,16 @@ on:
 # or two rapid pushes to the paths above) -- same reasoning as release.yml's concurrency group, but
 # queued rather than cancelled: an audit run is cheap and read-only, so there's no cost to letting
 # a queued one finish rather than dropping it.
+#
+# Includes ${{ github.ref }}, unlike release.yml's static "release-main": release.yml can only
+# ever run against main (its only trigger is push to main), so hardcoding "-main" into the group
+# name achieves the same one-lane-per-ref effect without needing the expression. This workflow
+# also has workflow_dispatch, which -- unlike schedule/push -- an operator can point at any branch
+# from GitHub's UI; without the ref in the group name, a one-off dispatch against a feature branch
+# would serialize behind (or block) the real scheduled compliance audit of main, which is the
+# opposite of what this concurrency group exists to prevent.
 concurrency:
-  group: policy-audit
+  group: policy-audit-${{ github.ref }}
   cancel-in-progress: false
 
 # No job inherits repo-default permissions; the job below declares exactly what it needs.

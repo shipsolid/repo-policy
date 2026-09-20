@@ -97,6 +97,26 @@ jobs:
       # would fail the build regardless of severity.
       - run: zizmor --pedantic --offline --min-severity high .github/workflows
 
+  validate-self-policy:
+    name: validate-self-policy
+    # Task 9: catches a malformed edit to this repo's own .github/repository-policy.yml at PR
+    # time -- without this job, the only thing that would ever catch it is policy-audit.yml's
+    # scheduled `repo-policy audit` run, which only fires AFTER a bad edit has already landed on
+    # main. Validate-only, so no GitHub token or network access is needed (README's CLI Reference:
+    # "Parses and schema-validates the policy file only; no network calls").
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: repo-policy validate --config .github/repository-policy.yml
+
   verify-action-lock:
     name: verify-action-lock
     # Task 7 interface: "CI fails when requirements-action.in, pyproject.toml, and
@@ -216,7 +236,7 @@ jobs:
     # block a merge, but a failed one does.
     name: required
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test, build, security, verify-action-lock, docker]
+    needs: [lint, typecheck, test, build, security, validate-self-policy, verify-action-lock, docker]
     if: always()
     permissions: {}
     steps:
