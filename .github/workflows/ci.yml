@@ -88,7 +88,14 @@ jobs:
         with:
           persist-credentials: false
       - run: pip install zizmor==1.30.1
-      - run: zizmor --pedantic --offline .github/workflows
+      # --min-severity high: this job's exit code gates CI (and, transitively, Release) on every
+      # run, so it must fail on the things Task 6's acceptance bar actually cares about (a
+      # High-severity result or an unpinned action) and not on Medium/Low/Informational advisories
+      # that don't meet that bar — otherwise CI is permanently red and no release can ever pass,
+      # which "satisfies" the gate only vacuously. Without this flag, --pedantic's advisory-level
+      # findings (e.g. concurrency-limits, artipacked on a job that legitimately needs to push)
+      # would fail the build regardless of severity.
+      - run: zizmor --pedantic --offline --min-severity high .github/workflows
 
   required:
     # Stable status name ("CI / required") for branch protection to point at, independent of how
