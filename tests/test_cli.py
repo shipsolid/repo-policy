@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
 from repo_policy.cli import main
+from repo_policy.github_client import GitHubAPIError
 
 
 def test_validate_exits_0_on_valid_config():
@@ -344,3 +345,58 @@ def test_audit_reports_usage_error_when_git_binary_is_missing(mock_client_cls, m
     assert result.exit_code == 2
     assert "could not determine repository" in result.output
     mock_client_cls.assert_not_called()
+
+
+@patch("repo_policy.cli.GitHubClient")
+def test_apply_exits_3_and_reports_partial_success_when_a_later_branch_mutation_fails(
+    mock_client_cls, tmp_path
+):
+    """Task 3: "main" (declared first) mutates cleanly, then "release" (declared second) raises --
+    the CLI must still report "main: applied ..." before the terminal error, not lose it behind
+    the uncaught exception, and must exit 3."""
+    mock_client = mock_client_cls.return_value.__enter__.return_value
+    mock_client.get_branch_protection.return_value = None
+    mock_client.get_required_signatures.return_value = False
+
+    def _put_branch_protection(branch, payload):
+        if branch == "release":
+            raise GitHubAPIError("boom", status_code=500)
+        return {}
+
+    mock_client.put_branch_protection.side_effect = _put_branch_protection
+    config_path = tmp_path / "policy.yml"
+    config_path.write_text(
+        "version: 1\nbranches:\n  main:\n    linear_history: true\n  release:\n    linear_history: true\n"
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["apply", "--config", str(config_path), "--repo", "acme/widgets", "--token", "t"]
+    )
+    assert result.exit_code == 3
+    assert "main: applied" in result.output
+    assert "release: failed" in result.output
+
+
+@patch("repo_policy.cli.GitHubClient")
+def test_apply_exits_3_and_reports_partial_success_when_a_repo_setting_mutation_fails(
+    mock_client_cls, tmp_path
+):
+    """Task 3: vulnerability_alerts succeeds, then automated_security_fixes raises -- output must
+    identify both the completed and the failed repo-setting operations, and exit 3."""
+    mock_client = mock_client_cls.return_value.__enter__.return_value
+    mock_client.get_repo.return_value = {}
+    mock_client.get_vulnerability_alerts.return_value = False
+    mock_client.get_automated_security_fixes.return_value = False
+    mock_client.enable_automated_security_fixes.side_effect = GitHubAPIError("boom", status_code=500)
+    config_path = tmp_path / "policy.yml"
+    config_path.write_text(
+        "version: 1\nbranches: {}\nrepo_settings:\n"
+        "  vulnerability_alerts: true\n  automated_security_fixes: true\n"
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["apply", "--config", str(config_path), "--repo", "acme/widgets", "--token", "t"]
+    )
+    assert result.exit_code == 3
+    assert "repo settings: vulnerability_alerts: applied" in result.output
+    assert "repo settings: automated_security_fixes: failed" in result.output

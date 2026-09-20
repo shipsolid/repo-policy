@@ -24,8 +24,8 @@ def test_apply_twice_against_already_compliant_repo_makes_zero_mutating_calls():
     client.get_branch_protection.return_value = None
     client.get_required_signatures.return_value = False
 
-    first_results = apply_all(client, config)
-    assert first_results[0].applied is True
+    first_summary = apply_all(client, config)
+    assert first_summary.journal[0].status == "applied"
     client.put_branch_protection.assert_called_once()
     put_payload = client.put_branch_protection.call_args.args[1]
     client.set_required_signatures.assert_called_once_with("main", True)
@@ -35,9 +35,9 @@ def test_apply_twice_against_already_compliant_repo_makes_zero_mutating_calls():
     client.get_branch_protection.return_value = put_payload
     client.get_required_signatures.return_value = True
 
-    second_results = apply_all(client, config)
-    assert second_results[0].applied is False
-    assert second_results[0].changes == []
+    second_summary = apply_all(client, config)
+    assert second_summary.journal[0].status == "verified"
+    assert second_summary.journal[0].changes == []
     client.put_branch_protection.assert_not_called()
     client.set_required_signatures.assert_not_called()
     client.create_ruleset.assert_not_called()

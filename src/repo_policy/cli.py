@@ -6,13 +6,19 @@ import sys
 
 import click
 
-from repo_policy.apply import apply_all, prefetch_rulesets, prune_rulesets
+from repo_policy.apply import (
+    PartialApplyError,
+    apply_all,
+    detect_stale_branch_protection,
+    prefetch_rulesets,
+    prune_rulesets,
+)
 from repo_policy.audit import audit_all
 from repo_policy.config import ConfigError, load_policy
 from repo_policy.diff import PolicyResolutionError
 from repo_policy.github_client import GitHubAPIError, GitHubClient
 from repo_policy.models import PolicyConfig
-from repo_policy.render import render_plan, render_repo_settings
+from repo_policy.render import render_apply_journal, render_plan, render_repo_settings
 from repo_policy.repo_settings import apply_repo_settings, plan_repo_settings
 
 EXIT_OK = 0
@@ -189,29 +195,46 @@ def apply(config_path: str, repo: str | None, token: str | None) -> None:
     try:
         with client as client:
             rulesets_cache = prefetch_rulesets(client, config, force=config.strict)
-            results = apply_all(client, config, rulesets_cache=rulesets_cache)
+            stale_branches = set(detect_stale_branch_protection(client, config))
+
+            try:
+                branch_summary = apply_all(client, config, rulesets_cache=rulesets_cache)
+            except PartialApplyError as exc:
+                # Render whatever mutations already succeeded before this one failed -- the whole
+                # point of this task -- then surface the underlying API error and exit 3, same as
+                # an outright GitHubAPIError below.
+                for line in render_apply_journal(exc.summary.journal):
+                    click.echo(line)
+                click.echo(str(exc.cause), err=True)
+                sys.exit(EXIT_API_ERROR)
+
+            for line in render_apply_journal(branch_summary.journal):
+                click.echo(line)
+            for branch in config.branches:
+                if branch in stale_branches:
+                    click.echo(
+                        f"{branch}: classic branch protection still exists on GitHub for this "
+                        "ruleset-enforced branch -- remove it manually, repo-policy will not delete it "
+                        "automatically"
+                    )
+
             if config.strict:
                 for deleted_name in prune_rulesets(client, config, rulesets_cache=rulesets_cache):
                     click.echo(f"- removed orphaned ruleset {deleted_name}")
-            repo_settings_result = apply_repo_settings(client, config)
+
+            try:
+                repo_settings_result = apply_repo_settings(client, config)
+            except PartialApplyError as exc:
+                for line in render_apply_journal(exc.summary.journal):
+                    click.echo(line)
+                click.echo(str(exc.cause), err=True)
+                sys.exit(EXIT_API_ERROR)
     except GitHubAPIError as exc:
         click.echo(str(exc), err=True)
         sys.exit(EXIT_API_ERROR)
     except PolicyResolutionError as exc:
         click.echo(str(exc), err=True)
         sys.exit(EXIT_CONFIG_ERROR)
-
-    for result in results:
-        if result.applied:
-            click.echo(f"{result.branch}: applied {len(result.changes)} change(s)")
-        else:
-            click.echo(f"{result.branch}: no changes needed")
-        if result.stale_branch_protection:
-            click.echo(
-                f"{result.branch}: classic branch protection still exists on GitHub for this "
-                "ruleset-enforced branch -- remove it manually, repo-policy will not delete it "
-                "automatically"
-            )
 
     if repo_settings_result.applied:
         applied_count = sum(

@@ -1,12 +1,16 @@
 from unittest.mock import MagicMock
 
+import pytest
+
 from repo_policy.apply import (
+    PartialApplyError,
     apply_all,
     apply_branch,
     detect_stale_branch_protection,
     plan_branch,
     prune_rulesets,
 )
+from repo_policy.github_client import GitHubAPIError
 from repo_policy.models import BranchPolicy, PolicyConfig, PullRequestPolicy
 
 
@@ -167,8 +171,8 @@ def test_apply_all_applies_every_declared_branch():
     config = PolicyConfig(
         version=1, branches={"main": BranchPolicy(), "release": BranchPolicy(linear_history=True)}
     )
-    results = apply_all(client, config)
-    assert {r.branch for r in results} == {"main", "release"}
+    summary = apply_all(client, config)
+    assert {entry.resource for entry in summary.journal} == {"main", "release"}
 
 
 def test_prune_rulesets_deletes_only_orphaned_repo_policy_rulesets():
@@ -360,3 +364,64 @@ def test_apply_twice_against_effectiveness_only_drift_converges_to_zero_changes(
     assert second_result.changes == []
     client.update_ruleset.assert_not_called()
     client.create_ruleset.assert_not_called()
+
+
+def test_apply_all_preflight_performs_no_mutation_when_a_later_branch_fails_to_plan():
+    """Task 3: preflight must finish reading/resolving/diffing every declared branch before any
+    branch is mutated -- a planning failure on "release" (the second declared branch) must leave
+    "main" (the first) planned but never written to, even though "main" itself has drift and would
+    otherwise be mutated first in declaration order."""
+    client = MagicMock()
+    client.get_branch_protection.return_value = None
+    client.get_required_signatures.return_value = False
+
+    def _find_ruleset_by_name(name, rulesets=None):
+        if name == "repo-policy:release":
+            raise GitHubAPIError("boom", status_code=500)
+
+    client.find_ruleset_by_name.side_effect = _find_ruleset_by_name
+    config = PolicyConfig(
+        version=1,
+        branches={
+            "main": BranchPolicy(linear_history=True),
+            "release": BranchPolicy(enforcement="ruleset", linear_history=True),
+        },
+    )
+
+    with pytest.raises(GitHubAPIError):
+        apply_all(client, config)
+
+    client.put_branch_protection.assert_not_called()
+    client.create_ruleset.assert_not_called()
+    client.update_ruleset.assert_not_called()
+
+
+def test_apply_all_raises_partial_apply_error_identifying_prior_success_on_mutation_failure():
+    """Task 3: when "release"'s mutation fails after "main"'s already succeeded, apply_all must
+    not lose "main"'s success to the uncaught exception -- it raises PartialApplyError carrying an
+    ApplySummary whose journal already has "main" recorded as applied, plus "release" recorded as
+    failed."""
+    client = MagicMock()
+    client.get_branch_protection.return_value = None
+    client.get_required_signatures.return_value = False
+
+    def _put_branch_protection(branch, payload):
+        if branch == "release":
+            raise GitHubAPIError("boom", status_code=500)
+        return {}
+
+    client.put_branch_protection.side_effect = _put_branch_protection
+    config = PolicyConfig(
+        version=1,
+        branches={
+            "main": BranchPolicy(linear_history=True),
+            "release": BranchPolicy(linear_history=True),
+        },
+    )
+
+    with pytest.raises(PartialApplyError) as exc_info:
+        apply_all(client, config)
+
+    statuses = {entry.resource: entry.status for entry in exc_info.value.summary.journal}
+    assert statuses["main"] == "applied"
+    assert statuses["release"] == "failed"
