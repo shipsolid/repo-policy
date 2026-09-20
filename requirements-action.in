@@ -1,0 +1,13 @@
+# Locked runtime + build dependencies for the Docker Action (see Dockerfile).
+#
+# Ranges below are copied verbatim from pyproject.toml's [project.dependencies] and
+# [build-system].requires -- do not widen or narrow them here independently of that file, or the
+# `scripts/verify-action-lock.sh` CI check (Task 7) will fail on drift between the two.
+#
+# hatchling is the build backend: `pip install --no-build-isolation .` (Dockerfile) needs it
+# already present in the environment, so it must be installed as a locked, hashed dependency too.
+hatchling
+click>=8.1,<9.0
+httpx[socks]>=0.27,<1.0
+pydantic>=2.0,<3.0
+pyyaml>=6.0,<7.0
