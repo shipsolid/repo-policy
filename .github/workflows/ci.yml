@@ -4,16 +4,108 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Lets release.yml depend on this exact job graph as a same-workflow-run dependency (needs: ci)
+  # instead of trusting a separately-triggered workflow's completion after the fact. Purely
+  # additive: doesn't change the pull_request/push behavior above.
+  workflow_call:
+
+# No job inherits repo-default permissions; each job below declares exactly what it needs.
+permissions: {}
 
 jobs:
-  test:
+  lint:
+    name: lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
       - run: ruff check src tests
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
       - run: mypy src
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
       - run: pytest -v
+
+  build:
+    name: build
+    # Package-validation job: confirms sdist/wheel build cleanly before release.yml is ever
+    # allowed to run semantic-release against this commit.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+
+  security:
+    name: security
+    # Narrow, in-scope security gate for this task: static analysis of our own workflow YAML.
+    # Dependency scanning (pip-audit), CodeQL, and a scheduled security.yml are a separate,
+    # dedicated workflow added later - this job only covers what Task 6 touches.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: pip install zizmor==1.30.1
+      - run: zizmor --pedantic --offline .github/workflows
+
+  required:
+    # Stable status name ("CI / required") for branch protection to point at, independent of how
+    # many jobs feed it. Runs even if a dependency failed (if: always()) so it can report failure
+    # itself instead of silently disappearing as "skipped" - a skipped required check does not
+    # block a merge, but a failed one does.
+    name: required
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, test, build, security]
+    if: always()
+    permissions: {}
+    steps:
+      - name: Check that every required job succeeded
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        env:
+          NEEDS_CONTEXT: ${{ toJSON(needs) }}
+        run: |
+          echo "One or more required jobs did not succeed:" >&2
+          echo "$NEEDS_CONTEXT" >&2
+          exit 1

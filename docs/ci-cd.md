@@ -2,15 +2,57 @@
 
 ## Pipeline Architecture
 
-Two workflows run on every push to `main`:
-
 | Workflow | File | Trigger | Purpose |
 |---|---|---|---|
-| CI | `.github/workflows/ci.yml` | push to `main`, every PR | `ruff check`, `mypy`, `pytest` |
-| Release | `.github/workflows/release.yml` | push to `main` | version bump, changelog, git tag, floating major tag, PyPI publish |
+| CI | `.github/workflows/ci.yml` | every PR, push to `main`, and as a reusable workflow called from Release | lint, typecheck, unit tests, package build, workflow security scan |
+| Release | `.github/workflows/release.yml` | push to `main` | run CI, then (if CI passes) version bump, changelog, git tag, floating major tag, PyPI publish |
 
-Both are confirmed running green on real GitHub Actions runners, not just locally — see
-`docs/test-strategy.md`.
+The pre-gating version of both workflows ran green on real GitHub Actions runners, not just
+locally (see `docs/test-strategy.md` for the project's general stance on real-vs-mocked
+verification). The job split, `workflow_call` gating, and permission scoping described below are
+new in this revision and are pending their first live run — see this repository's audit-remediation
+plan (Task 6) for the local `zizmor` verification performed instead.
+
+### CI job graph
+
+`ci.yml` splits what used to be one `test` job into five independent jobs — `lint` (`ruff check`),
+`typecheck` (`mypy`), `test` (`pytest`), `build` (`python -m build`, package-validation), and
+`security` (`zizmor --pedantic --offline` against this repo's own workflow YAML) — plus a final
+`required` job that `needs:` all five and fails if any of them failed, were cancelled, or were
+skipped. `required` exists purely to give branch protection and Release a single stable status
+name, `CI / required`, that doesn't change as jobs are added or removed. Each job declares its own
+minimal `permissions:` (`contents: read`); the workflow-level default is `permissions: {}`.
+
+`security` here is narrowly scoped to this repo's own workflow files — it is not dependency
+scanning. `pip-audit`, CodeQL, and a scheduled `security.yml` are a separate, later addition (see
+the audit-remediation plan's Task 8); this job only covers what gates releases today.
+
+### CI gates Release: same-workflow dependency, not `workflow_run`
+
+`release.yml` triggers on the same `push: branches: [main]` event as `ci.yml`'s own direct
+trigger, and its first job (`ci`) invokes `ci.yml` as a reusable workflow
+(`uses: $/.github/workflows/ci.yml`) rather than reacting to `ci.yml`'s completion after the fact.
+`release` then `needs: ci`, so a failing or incomplete CI run leaves `release` (and `publish`,
+which `needs: release`) skipped — nothing downstream runs.
+
+This was originally built with a `workflow_run` trigger (`on: workflow_run: workflows: ["CI"], …`)
+gated by an `if:` checking `conclusion == 'success'`, `head_branch == 'main'`, the triggering
+event, and the exact `head_sha`. That is a legitimate, commonly-used pattern in principle, but
+`zizmor`'s `dangerous-triggers` audit flags any use of `workflow_run` at high severity
+unconditionally — its own documentation states no amount of receiving-side `if:` filtering makes
+it safe in zizmor's model, and specifically calls out a `github.repository` check as ineffective
+because `workflow_run` always executes in the target repository's context regardless of what
+triggered the watched workflow. Since `zizmor --pedantic --offline` with no high-severity result is
+this pipeline's static-analysis gate, `workflow_call` composition replaced `workflow_run`: CI runs
+inside the same workflow *run* as the release job, on the same commit, with no separate event or
+cross-run SHA to validate.
+
+**Trade-off accepted:** because `ci.yml` keeps its own direct `push: branches: [main]` trigger (so
+`main` still gets an independent CI signal even if `release.yml` is ever broken or disabled) *and*
+`release.yml` calls `ci.yml` again as a reusable workflow, every push to `main` runs the CI job
+graph twice — once producing the standalone `CI / required` check, once nested under `Release / ci`
+gating the release. This is deliberate: reliability of "is `main` green" outweighs the modest extra
+compute for a repository this size.
 
 ## Branch Strategy
 
@@ -20,29 +62,56 @@ Single `main` branch. No release branches; every release is cut directly from `m
 ## Release Process
 
 1. A commit lands on `main` (directly, or via a merged PR).
-2. `python-semantic-release` inspects commits since the last release tag:
+2. `release.yml`'s `ci` job runs the full CI job graph (lint, typecheck, test, build, security)
+   against that commit. If any of it fails, nothing below happens — the `release` and `publish`
+   jobs are skipped, not just conditioned to no-op.
+3. `python-semantic-release` inspects commits since the last release tag:
    - `feat: ...` → minor bump
    - `fix: ...` → patch bump
    - `feat!: ...` or a `BREAKING CHANGE:` footer → major bump
    - `chore:` / `docs:` / `test:` / `ci:` → no release
-3. If a release is warranted, it bumps `pyproject.toml`'s `project.version` **and**
+4. If a release is warranted, it bumps `pyproject.toml`'s `project.version` **and**
    `src/repo_policy/__init__.py`'s `__version__` (via `version_variables` in
    `[tool.semantic_release]` — both must be listed, or they silently diverge; this happened once
    in production, see `docs/test-strategy.md`), regenerates `CHANGELOG.md`, commits as
    `chore(release): {version} [skip ci]`, and tags `v{version}`.
-4. The floating major tag (`v0` until a `1.0.0` ships — see README) is force-moved to point at the
+5. Before anything below runs, the workflow diffs that release commit against the pre-release
+   commit and fails the job if it touched anything other than `pyproject.toml`,
+   `src/repo_policy/__init__.py`, and `CHANGELOG.md` — a check against a compromised or
+   misbehaving semantic-release run silently slipping in an unrelated code change.
+6. The floating major tag (`v0` until a `1.0.0` ships — see README) is force-moved to point at the
    new release tag.
-5. The package is published to PyPI via trusted publishing (OIDC) — no long-lived API token stored
-   in the repo.
+7. The built sdist/wheel are handed off (via `actions/upload-artifact` / `download-artifact`) to a
+   separate `publish` job, and published to PyPI via trusted publishing (OIDC) — no long-lived API
+   token stored in the repo.
+
+### Permission scoping and concurrency
+
+Each job in `release.yml` carries only the permission its own steps need:
+
+| Job | Permissions | Why |
+|---|---|---|
+| `ci` | `contents: read` | Only checks out code to lint/type-check/test/build. |
+| `release` | `contents: write` | Pushes the semantic-release commit and moves the floating tag. |
+| `publish` | `id-token: write` | OIDC trusted publishing only — never checks out the repo, never sees `contents: write`. |
+
+The workflow-level default is `permissions: {}`; nothing falls back to the repository's broader
+default token permissions.
+
+The whole pipeline runs under `concurrency: {group: release-main, cancel-in-progress: false}`, so
+two rapid pushes to `main` queue and finish in order rather than racing on the same
+version/tag/PyPI state — the second run waits for the first to complete before its own `ci` job
+even starts, and nothing is cancelled out from under a release in progress.
 
 ## A step-ordering bug this pipeline shipped once
 
-Steps 4 and 5 are independent — nothing about moving the floating tag depends on PyPI publishing
-succeeding, or vice versa. The workflow originally ran them in the order 5-then-4: when PyPI
-publish failed (as it did on every release before trusted publishing was configured), step 4 was
-skipped along with it, silently. `uses: shipsolid/repo-policy@v0` was broken for every consumer
-across several releases, and nothing in the workflow's status said so — the job still reported
-success up to the point PyPI's own step failed.
+Steps 6 and 7 above (tag-move and PyPI publish) are independent — nothing about moving the
+floating tag depends on PyPI publishing succeeding, or vice versa. The workflow originally ran
+them in the reverse order: when PyPI publish failed (as it did on every release before trusted
+publishing was configured), the tag-move was skipped along with it, silently. `uses:
+shipsolid/repo-policy@v0` was broken for every consumer across several releases, and nothing in
+the workflow's status said so — the job still reported success up to the point PyPI's own step
+failed.
 
 **The fix:** run the tag-move step before the PyPI-publish step. Two independent side effects of
 one event should never be ordered such that one's failure can silently skip the other.
