@@ -310,3 +310,53 @@ def test_apply_twice_against_ineffective_ruleset_converges_to_zero_changes():
     assert second_result.changes == []
     client.update_ruleset.assert_not_called()
     client.create_ruleset.assert_not_called()
+
+
+def test_apply_twice_against_effectiveness_only_drift_converges_to_zero_changes():
+    """Same shape as the metadata-drift idempotency check above, but for the drift
+    metadata_changes() can't catch on its own: the ruleset's metadata and rule content are already
+    fully canonical, yet GitHub's effective-rules endpoint initially shows it isn't contributing an
+    active rule on the branch (e.g. eventual-consistency lag right after a change, or a transient
+    evaluation-order quirk). There's no metadata field left to correct in that case, so the first
+    apply's "repair" is a best-effort re-PUT of the same already-canonical payload; once GitHub's
+    effective-rules view catches up, a second apply must converge to zero changes and perform zero
+    further mutations."""
+    canonical_raw = {
+        "id": 7,
+        "name": "repo-policy:main",
+        "target": "branch",
+        "enforcement": "active",
+        "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+        "rules": [{"type": "required_linear_history"}],
+        "bypass_actors": [],
+    }
+    client = MagicMock()
+    client.find_ruleset_by_name.return_value = canonical_raw
+    # Metadata and rule content are already canonical -- only the effective-rules endpoint shows a
+    # problem: some other ruleset (999), not this one (7), is what's actually active here.
+    client.get_rules_for_branch.return_value = [
+        {"type": "required_linear_history", "ruleset_id": 999, "ruleset_source_type": "Organization"}
+    ]
+    config = _config(enforcement="ruleset", linear_history=True)
+
+    first_result = apply_branch(client, config, "main")
+    assert first_result.applied is True
+    assert [c.field for c in first_result.changes] == ["ruleset_effectiveness"]
+    client.update_ruleset.assert_called_once()
+    ruleset_id, payload = client.update_ruleset.call_args.args
+    assert ruleset_id == 7
+    assert payload["enforcement"] == "active"
+    assert payload["conditions"] == {"ref_name": {"include": ["refs/heads/main"], "exclude": []}}
+
+    # Second pass: GitHub's effective-rules endpoint now confirms ruleset 7 is genuinely active.
+    client.reset_mock()
+    client.find_ruleset_by_name.return_value = canonical_raw
+    client.get_rules_for_branch.return_value = [
+        {"type": "required_linear_history", "ruleset_id": 7, "ruleset_source_type": "Repository"}
+    ]
+
+    second_result = apply_branch(client, config, "main")
+    assert second_result.applied is False
+    assert second_result.changes == []
+    client.update_ruleset.assert_not_called()
+    client.create_ruleset.assert_not_called()

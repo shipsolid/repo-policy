@@ -75,6 +75,14 @@ def _branch_changes(
 
 
 def _ruleset_effectiveness_changes(client: GitHubClient, branch: str, ruleset_id: int) -> list[Change]:
+    """When this fires, apply_branch's "repair" is a best-effort re-PUT of the exact same already-
+    canonical payload -- there's no metadata field left to correct, since metadata_changes() (the
+    only thing that would have given apply something concrete to fix) already reported nothing.
+    That re-PUT still has real value (GitHub eventual-consistency lag on the effective-rules view
+    is one legitimate cause, and it's a cheap, safe no-op otherwise), but it can't force convergence
+    against a cause outside repo-policy's control, e.g. an org-level ruleset override; see
+    test_apply_twice_against_effectiveness_only_drift_converges_to_zero_changes for the case this
+    does resolve on a second apply."""
     active_ruleset_ids = {rule.get("ruleset_id") for rule in client.get_rules_for_branch(branch)}
     if ruleset_id in active_ruleset_ids:
         return []
