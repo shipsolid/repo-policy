@@ -27,7 +27,7 @@ integration` on branch protection/ruleset endpoints, regardless of what the work
 | Attacker who obtains the CI-stored PAT | Full read/write on whatever the PAT's scope covers — not limited to what `policy.yml` declares | Arbitrary branch protection/ruleset changes, or broader if the PAT has full `repo` scope | Scope the PAT as narrowly as GitHub allows (fine-grained PAT, `Administration` permission only, single-repository access); rotate it; never log it (repo-policy never prints the token) |
 | Malicious `policy.yml` in a fork's PR, run via `pull_request_target` | Attacker-controlled config gets a privileged token via workflow misconfiguration | Same blast radius as PAT compromise above | Never run repo-policy's `apply` mode on `pull_request_target` against untrusted input; `audit`/`plan` read-only are lower risk but still exercise real API calls with the token |
 | Naming collision: something else creates a ruleset named `repo-policy:<branch>` | `strict` mode's prune logic would treat it as repo-policy-owned and could delete it | Loss of an unrelated ruleset | The naming convention is a documented hard constraint (see `docs/adrs/0004-*`) — don't create rulesets with that prefix outside repo-policy |
-| Attacker who obtains `RELEASE_BOT_TOKEN` or `RELEASE_BOT_SIGNING_KEY` (Task 10) | Open/merge an arbitrary release PR as the release-bot, or forge a signature that verifies as the bot's identity | A malicious, signature-"verified" release published under the bot's name | Both live only as secrets scoped to the protected `release` GitHub Environment (required-reviewer approval, not a plain repository secret) — see "Release Signing" below; `RELEASE_BOT_TOKEN` is scoped to `Contents: Read and write` + `Pull requests: Read and write` on this single repository only, never full `repo` scope |
+| Attacker who obtains `RELEASE_BOT_TOKEN` or `RELEASE_BOT_SIGNING_KEY` (Task 10) | Open/merge an arbitrary release PR as the release-bot, or forge a signature that verifies as the bot's identity | A malicious, signature-"verified" release published under the bot's name | Both live only as secrets scoped to the protected `release` GitHub Environment (required-reviewer approval, not a plain repository secret) — see "Release Signing" below; `RELEASE_BOT_TOKEN` is a **classic** PAT (not fine-grained — see "Secrets Management" below for why) scoped to `public_repo` only, the narrowest classic scope GitHub offers, issued from the `shipsolid-release-bot` account rather than the human owner's; `public_repo` is coarser than a fine-grained PAT's separately-toggled permissions would have been, but still never full `repo` scope, and the bot's own collaborator access is Write, not Admin, so it can't touch branch protection/ruleset settings even with the token in hand |
 
 ## Authentication
 
@@ -64,25 +64,39 @@ restrict itself to a subset. This is why token scoping (above) is the primary co
 - A fourth PAT, `RELEASE_BOT_TOKEN` (Task 10), belongs to the dedicated `shipsolid-release-bot`
   identity and is what `.github/workflows/release.yml`'s `release` job uses to push its version-bump
   branch, open and squash-merge the release pull request, push the signed release tag, and create
-  the GitHub release — see "Release Signing" below for the full design. Fine-grained, scoped to this
-  single repository, `Contents: Read and write` + `Pull requests: Read and write` only — no
-  `Administration` (the bot merges through the normal PR path, same as any other collaborator, and
-  never touches branch protection itself), and deliberately no `Checks`/`Actions` read permission
-  either: fine-grained PATs currently cannot call the Checks API at all (confirmed against GitHub's
+  the GitHub release — see "Release Signing" below for the full design. **Classic** PAT, not
+  fine-grained: fine-grained PATs can only be issued by an account that is the repository's owner or
+  an org member with access, and `shipsolid-release-bot` is a plain outside collaborator on
+  `shipsolid/repo-policy` — a personal-account-owned repository, with no org membership concept to
+  grant it through — so it structurally cannot create a fine-grained PAT scoped to this repo at all,
+  confirmed against GitHub's own fine-grained-PAT documentation. Scoped to `public_repo` only (this
+  repository is currently public) — the narrowest classic scope GitHub offers; classic scopes are
+  coarser than fine-grained's separately-toggled repository permissions, so this is broader than the
+  originally-specified `Contents: Read and write` + `Pull requests: Read and write` would have been,
+  but still far short of full `repo` scope, and the bot's own collaborator access remains Write, not
+  Admin, so branch protection/ruleset settings stay out of reach regardless of what the token itself
+  can technically call. `release.yml` retries a plain `gh pr merge` on an interval rather than
+  polling check-run status directly — this is a deliberate design choice (a classic PAT like this one
+  CAN call the Checks API, so it isn't a workaround for a permission gap), which happens to also
+  sidestep a real, separate constraint should a future migration back to fine-grained ever become
+  possible: fine-grained PATs currently cannot call the Checks API at all (confirmed against GitHub's
   own fine-grained-PAT permissions reference — there is no selectable "Checks" repository
-  permission), so `release.yml` never asks this token to independently read check-run status. It
-  instead retries a plain `gh pr merge` on an interval, relying on GitHub's own server-side
-  mergeability evaluation (which checks `CI / required` using the repository's branch-protection
-  state, not the caller's token scope) — see `docs/ci-cd.md` for the design reasoning. Stored as a
-  secret on the protected `release` GitHub Environment, not as a repository secret, so it's only
-  materialized on the runner after a human approves that environment's required-reviewer gate. Does
-  not exist yet; see the setup checklist below.
+  permission). Relying instead on GitHub's own server-side mergeability evaluation (which checks
+  `CI / required` using the repository's branch-protection state, not the caller's token scope) is
+  simply a simpler dependency — see `docs/ci-cd.md` for the full design reasoning. Stored as a secret
+  on the protected `release` GitHub Environment, not as a repository secret, so it's only
+  materialized on the runner after a human approves that environment's required-reviewer gate.
+  Provisioned (issued from the `shipsolid-release-bot` account, stored as a `release`-environment
+  secret); see the setup checklist below for what else still needs confirming before the first live
+  release.
 - `RELEASE_BOT_SIGNING_KEY` (Task 10) — the release-bot's SSH private signing key, also stored as a
   `release`-environment secret (same approval gate as `RELEASE_BOT_TOKEN` above), used by
   `release.yml` to produce a signed commit and a signed, annotated release tag. The corresponding
   public key is `RELEASE_BOT_SSH_PUBLIC_KEY`, a plain (non-secret) repository **variable** — public
   keys don't need encryption, and keeping it as a variable rather than a secret makes it visible in
-  the Actions UI for anyone auditing what key the pipeline currently trusts. Neither exists yet.
+  the Actions UI for anyone auditing what key the pipeline currently trusts. Both are now
+  provisioned, and the public key is registered on the bot's GitHub account as a Signing Key; see the
+  setup checklist below for what else still needs confirming.
 
 ## Vulnerability Management
 
@@ -224,9 +238,19 @@ git verify-tag v<version>
 GitHub also shows its own "Verified" badge on the tag/release page once the bot's public key is
 registered there as a Signing Key — that's the independent, third-party confirmation that the
 signature really does belong to the `shipsolid-release-bot` account, not just that some SSH
-signature validates locally. The commit the tag points at on `main` will **not** show as Verified —
-that's expected and documented in `docs/ci-cd.md`, not a bug: GitHub's squash-merge always
-synthesizes a new commit that never carries the bot's (or anyone's) signature, for any merge method.
+signature validates locally. The commit the tag points at on `main` **will** also show as Verified —
+GitHub signs commits made through its web interface/API (which is what a squash-merge is) with its
+own key and shows them Verified (see `https://github.com/web-flow.gpg` and GitHub's own
+commit-signature-verification docs); that's a *different* Verified signature from the tag's, though:
+GitHub's own, attesting "GitHub performed this merge," not the release-bot's, attesting "the
+release-bot produced this release." The "no verification" behavior documented in `docs/ci-cd.md` is
+specific to *rebase*-merge, not squash — GitHub's docs state rebase-merge replays commits without
+commit signature verification because GitHub never actually authors the resulting commit and so
+can't sign it; squash-merge is not that case. Both signatures are real and independently meaningful,
+which is a stronger story than "the commit shows nothing": the tag remains this pipeline's
+release-bot-attributed verified artifact for the reason above (there is still no way to get the
+release-bot's own signature onto the merge-synthesized commit object), not because the commit itself
+goes unverified.
 
 ### Key rotation
 
@@ -345,63 +369,93 @@ mechanism it uses for every other declared `repo_settings` toggle. Turning them 
 `shipsolid/repo-policy` itself now requires running `repo-policy apply` with sufficient credentials
 (repository-admin / fine-grained `Administration: Read and write`), not a separate manual UI step.
 
-## Release Pipeline Setup Checklist (Task 10, Not Yet Done)
+## Release Pipeline Setup Checklist (Task 10)
 
 `.github/workflows/release.yml` and `pyproject.toml` are already written for the design described in
-"Release Signing" above and in `docs/ci-cd.md`, but none of it can run yet — nothing in this section
-exists on `shipsolid/repo-policy` today. This is the exhaustive list of what needs to exist before
-the first live release under this design; everything below is a live-repo-admin action outside what
-a code change can do on its own (same pattern as `POLICY_AUDIT_TOKEN` above).
+"Release Signing" above and in `docs/ci-cd.md`. Items 2–4 below are now **provisioned** (the token,
+signing key, and public key exist and are stored correctly); the remaining items are either
+unconfirmed or are new pre-flight checks a later review added. This is the exhaustive list of what
+needs to be true before the first live release under this design; everything below is a live-repo
+state check or admin action outside what a code change can do on its own (same pattern as
+`POLICY_AUDIT_TOKEN` above).
 
 1. **The `shipsolid-release-bot` GitHub account** (already created per the dispatch that produced
    this design):
    - Add `amitsingh007s+repopolicybot@gmail.com` as a **verified** email on the account — SSH
      signature verification checks the signing commit/tag's committer email against a verified
      email on the account that owns the registered signing key, so an unverified email means every
-     release shows as unverified on GitHub even with a technically-valid signature.
+     release shows as unverified on GitHub even with a technically-valid signature. *(Not confirmed
+     — verify before the first live release.)*
    - Add the bot's SSH **public** key under Settings → SSH and GPG keys → New SSH key, with key type
      set to **Signing Key** (not "Authentication Key" — the two are registered separately on GitHub
-     and only a Signing Key is checked against commit/tag signatures).
+     and only a Signing Key is checked against commit/tag signatures). **Done** — the bot's public
+     key is registered as a Signing Key on its account.
    - Confirm the bot's collaborator permission level on `shipsolid/repo-policy` is **Write**, not
      Admin. Write is sufficient — `RELEASE_BOT_TOKEN` only needs to push branches, open PRs, and
      merge PRs that already satisfy branch protection's requirements (approvals: 0, `CI / required`
      green); it never touches branch protection/ruleset settings itself, so Admin would be
      unnecessary standing privilege on a repository that specifically avoids granting exactly that
-     kind of unnecessary standing privilege (see this file's Threat Model).
-2. **`RELEASE_BOT_TOKEN`** — a fine-grained personal access token issued from the bot's own account
-   (not the human owner's), scoped to `shipsolid/repo-policy` only, with repository permissions
-   `Contents: Read and write` and `Pull requests: Read and write` only (no `Administration`, no
-   `Checks`/`Actions` read either — see "Secrets Management" above for why those aren't needed, and
-   aren't even selectable for a fine-grained PAT today). Store it as a **secret on the `release`
-   GitHub Environment** (step 4 below), not a repository or organization secret.
+     kind of unnecessary standing privilege (see this file's Threat Model). *(Not confirmed — verify
+     before the first live release.)*
+2. **`RELEASE_BOT_TOKEN`** — a **classic** personal access token, not fine-grained, issued from the
+   bot's own account (not the human owner's), scoped to `public_repo` only (this repository is
+   currently public). Classic, not fine-grained, because fine-grained PATs can only be issued by an
+   account that owns the target repository or belongs to the org that does; `shipsolid-release-bot`
+   is a plain outside collaborator on `shipsolid/repo-policy`, a personal-account-owned repository
+   with no org membership path around that restriction, so a fine-grained PAT scoped to this repo is
+   not something the bot's account can create at all — confirmed against GitHub's own fine-grained-
+   PAT documentation. `public_repo` is the narrowest classic scope available; it's coarser than the
+   originally-specified fine-grained `Contents: Read and write` + `Pull requests: Read and write`
+   would have been, but the bot's Write-only collaborator access (item 1 above) still keeps branch
+   protection/ruleset settings out of reach regardless. **Done** — stored as a **secret on the
+   `release` GitHub Environment**, not a repository or organization secret.
 3. **`RELEASE_BOT_SIGNING_KEY`** — the bot's SSH *private* signing key (the one whose public half
    was added to the bot's account in step 1), generated locally by whoever administers this — never
-   pasted into a workflow run, an issue, or a chat transcript. Store it as a **secret on the
-   `release` GitHub Environment** (step 4 below).
+   pasted into a workflow run, an issue, or a chat transcript. **Done** — stored as a **secret on the
+   `release` GitHub Environment**.
 4. **`RELEASE_BOT_SSH_PUBLIC_KEY`** — the corresponding SSH *public* key, same value as registered
-   on the bot's GitHub account in step 1. Store it as a plain **repository variable** (Settings →
-   Secrets and variables → Actions → Variables), not a secret — it's not sensitive, and keeping it
-   as a variable makes it visible in the Actions UI for anyone auditing which key the pipeline
-   currently trusts.
-5. **The `release` GitHub Environment** (Settings → Environments → New environment, named exactly
-   `release` to match `environment: release` in `release.yml`):
+   on the bot's GitHub account in step 1. **Done** — stored as a plain **repository variable**
+   (Settings → Secrets and variables → Actions → Variables), not a secret — it's not sensitive, and
+   keeping it as a variable makes it visible in the Actions UI for anyone auditing which key the
+   pipeline currently trusts.
+5. **The `release` GitHub Environment** (Settings → Environments, named exactly `release` to match
+   `environment: release` in `release.yml`) — must already exist, since items 2–3 above are stored
+   as secrets scoped to it:
    - Add a **required reviewers** protection rule naming the repository owner (or whoever should
      approve releases) — this is the human-in-the-loop gate from brief Step 2; every real release
-     pauses here for a manual approval click before the `release` job's first step runs.
-   - Add `RELEASE_BOT_TOKEN` and `RELEASE_BOT_SIGNING_KEY` (steps 2–3 above) as secrets **scoped to
-     this environment**, not to the repository. An environment secret is only exposed to a job run
-     after that job's environment-protection rules are satisfied; a repository secret would bypass
-     the approval gate entirely and defeat the point of this step.
+     pauses here for a manual approval click before the `release` job's first step runs. *(Not
+     confirmed — verify this rule is actually configured, not just that the environment exists,
+     before the first live release: without it, the two secrets above are exposed to the `release`
+     job with no approval gate at all.)*
    - Recommended, not required: restrict the environment's allowed deployment branches to `main` —
      `release.yml`'s only trigger is already `push: branches: [main]`, so this is defense in depth,
      not a functional requirement.
+6. **"Allow squash merging" must be enabled** in `shipsolid/repo-policy`'s repository settings
+   (Settings → General → Pull Requests). `gh pr merge --squash` hard-fails if it isn't, and nothing
+   in `.github/repository-policy.yml` declares or detects this setting (it's a merge-method toggle,
+   not something `repo-policy` models), so its absence wouldn't surface as a clear error — it would
+   show up only as the merge-retry loop's 30-minute timeout, with a "not mergeable" message that
+   looks identical to "CI / required hasn't finished yet."
+7. **Confirm no out-of-band tag-protection rule exists** for `refs/tags/*` on the live repository
+   (Settings → Tags, Settings → Rules) that could block the release-bot's direct tag push. This
+   repo's own self-policy declares neither a classic tag-protection rule nor a tag-scoped Ruleset
+   (see docs/ci-cd.md's "Tag protection vs. branch protection" research), but that only covers what
+   `repo-policy` itself manages — it can't rule out something added by hand outside `repo-policy`.
+8. **Confirm `CI / required` actually reports as that exact status-check context** on a real
+   bot-authored PR before relying on it for the first live release. This design's merge-retry loop
+   (see `release.yml`'s "Wait for the PR's required check and squash-merge it" step) entirely depends
+   on GitHub evaluating mergeability against that exact context name; if the release-bot's PR ever
+   produces a differently-named or missing check for any reason, every release attempt will time out
+   at 30 minutes with a misleading "not mergeable yet" message rather than a clear "wrong check name"
+   error. This is a live-repo verification step for whoever runs the first real release, not
+   something re-checked here.
 
-Until all five are in place, pushes to `main` will still run CI (unaffected — `ci.yml`'s own direct
-trigger and `release.yml`'s `ci` job both work today), but `release.yml`'s `release` job will fail to
-even start (no `release` environment to satisfy) or fail immediately on first use of a missing
-secret. That is the correct, safe state to be in until setup is complete — it fails closed, the same
-way `POLICY_AUDIT_TOKEN` not existing yet means `policy-audit.yml` fails rather than silently
-skipping its audit.
+Whatever in items 1, 5, 6, 7, and 8 above isn't yet true, `release.yml`'s `release` job will either
+fail to start, fail on first use of a missing/misconfigured piece, or — the more insidious case for
+items 6–8 — run for the full 30-minute merge-retry window before failing with a timeout message that
+doesn't point at the real cause. All of these are safe failure modes (no release ships), just not
+always a *fast* one; confirming items 6–8 before the first live release attempt avoids burning that
+timeout on a problem the retry loop was never going to be able to solve.
 
 ## Emergency Recovery
 

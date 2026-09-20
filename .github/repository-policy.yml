@@ -24,11 +24,13 @@
 # fallback. If either requirement is ever dropped, re-check the *other* one too before assuming
 # `ruleset` becomes viable -- don't re-derive this from source next time, this is the answer.
 #
-# `signed_commits` is deliberately left unset (not `true`) on every branch below. The plan's Task 9
-# entry requires Tasks 1, 2, 6, and 10 complete before enabling it; Task 10 (dedicated release-bot
-# identity + SSH signing key infrastructure) has not been done yet. Enabling it now would make every
-# push -- including the maintainer's own -- fail signature verification with no working identity to
-# sign as.
+# `signed_commits` is deliberately left unset (not `true`) on every branch below. Task 10's own
+# work (dedicated release-bot identity + SSH signing key infrastructure) is now essentially done --
+# but turning `signed_commits: true` on here is a SEPARATE decision from that, not a follow-on step
+# now that Task 10 is complete. It would require every future commit to `main` to be signed --
+# including the human maintainer's own personal commits and PRs, not just the release-bot's -- which
+# needs the maintainer's own commit-signing setup (a distinct, not-yet-done piece of work, out of
+# scope for the release pipeline itself). Revisit this once that exists.
 version: 1
 
 branches:

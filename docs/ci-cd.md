@@ -88,6 +88,41 @@ after the tag already exists was considered and rejected: PSR treats an already-
 "nothing to do" (checked via `previously_released_versions` in `version.py`) and silently no-ops,
 so it can't be used to "finish" a release after an out-of-band tag push.
 
+**Host-side vs. container-side signing config — a second `$HOME` this design has to account for:**
+the pinned `python-semantic-release` Action runs as a **Docker container action**. When given the
+`ssh_public_signing_key`/`ssh_private_signing_key`/`git_committer_email` inputs, its own `action.sh`
+writes the keys and an `allowed_signers` file and sets `gpg.format ssh` / `user.signingKey` /
+`commit.gpgsign` / `tag.gpgsign` globally — but *inside its own container*, where `$HOME` is
+`/github/home` (a runner-temp-dir bind mount). That is a completely different `$HOME` from the one
+every plain `run:` step in the same job uses on the **host** — confirmed by tracing the pinned
+action's own `action.sh` alongside the GitHub Actions runner's own `ContainerActionHandler.cs`
+source, and reproduced locally: pointing `git verify-tag`/`git verify-commit`/`git tag -s` at the
+container's config paths from a host shell fails with "Unable to open allowed keys file" / "Couldn't
+load public key". Concretely, this means the PSR step's own container-internal signing config never
+reaches the signing-smoke-test step right after it, the two diff-checks, or the tag-creation/
+floating-tag steps further down — all of which run as ordinary host-side `run:` steps. `release.yml`
+therefore has an explicit, early "Configure host-side git signing" step, right after checkout and
+before the PSR step, that duplicates (not replaces) the same `git config --global` setup on the
+**host's** `$HOME`, using the same secrets and the same committer identity. This is why the commit
+PSR signs *inside its container* still verifies correctly in a *later host-side* step: the signature
+bytes are embedded in the commit/tag object itself (part of the repository, which the container and
+host share via the mounted workspace), so any correctly-configured `allowed_signers` file — container
+or host — can verify it; the container-internal config only had to be correct for PSR's own signing
+step to succeed, not for anything downstream.
+
+One second-order consequence of setting `tag.gpgsign true` globally on the host: the pre-existing
+"move the floating major tag" step (`git tag -f "$MAJOR_TAG" "$RELEASE_TAG"`, no `-a`/`-m` of its
+own) stops working once that global config is in place — git refuses to create a tag with no message
+once tag signing is on ("fatal: no tag message?", exit 128), confirmed by local reproduction. The
+fix is a one-command override, `git -c tag.gpgsign=false tag -f "$MAJOR_TAG" "$RELEASE_TAG"`, safe
+specifically because `$MAJOR_TAG` (e.g. `v0`) is a floating convenience alias, not itself the
+verified release artifact. The `^{}`-peeling this step doesn't do is deliberate, not an oversight:
+without it, `git tag -f "$MAJOR_TAG" "$RELEASE_TAG"` creates a *nested* lightweight tag pointing
+directly at the signed annotated `$RELEASE_TAG` object, and `git verify-tag "$MAJOR_TAG"` verifies
+transitively through that nesting — confirmed by local scratch testing (a real ed25519 key, a real
+`allowed_signers` file: the nested tag verifies cleanly against the same signature the underlying
+annotated tag carries). Peeling to the commit would lose that property for no benefit.
+
 **Tag protection vs. branch protection (verified, not assumed):** the task that produced this
 redesign started from a documentation-based hypothesis that classic branch protection — the
 `branch_protection` enforcement `repository-policy.yml` declares for `main`, which calls
@@ -113,13 +148,22 @@ synthesizes one from the PR's diff; even rebase-merge, which looks like it shoul
 when the base hasn't moved, "always updates the committer information and creates new commit SHAs"
 per GitHub's own docs, and "the commits ... are added to the base branch without commit signature
 verification" because "GitHub didn't truly create this commit, and can't therefore sign it" with the
-original author's key. There is no merge method that lands the release-bot's exact, pre-signed
-commit object on `main` through a required PR merge — full stop, not a gap in this design. The
-annotated release **tag** doesn't have this problem: it's a separate git object from the commit it
-points at, created and pushed directly (tags being outside branch protection's scope, per the
-research above) against whatever commit actually landed on `main`, carrying its own valid signature
-regardless of whether that underlying commit is itself signed. From Task 10 on, the tag — not the
-commit — is this pipeline's cryptographically-verified release artifact; `release.yml`'s
+original author's key. **That "no verification" behavior is specific to rebase-merge, not squash** —
+squash-merge is exactly the case GitHub *did* truly create: GitHub signs commits made through its web
+interface/API with its own key (`web-flow.gpg`) and shows them Verified, and a squash-merge performed
+via `gh pr merge` goes through that same API path. So the squash-merge commit that lands on `main`
+does get a real, independently-Verified signature — just not the release-bot's. That distinction is
+the actual reason the tag, not the commit, remains this pipeline's release-bot-attributed artifact:
+there is no merge method that lands the release-bot's own exact, pre-signed commit object on `main`
+through a required PR merge — full stop, not a gap in this design — not because the resulting commit
+is unverified in any sense. The annotated release **tag** doesn't have this problem: it's a separate
+git object from the commit it points at, created and pushed directly (tags being outside branch
+protection's scope, per the research above) against whatever commit actually landed on `main`,
+carrying its own valid release-bot signature regardless of whether — or by whom — the underlying
+commit is itself signed. From Task 10 on, both signatures are real and independently checkable
+(GitHub's on the commit, attesting the merge itself; the release-bot's on the tag, attesting this
+specific release), but the tag is the one this pipeline treats as its cryptographically-verified
+release artifact, since it's the only one that identifies the release-bot specifically. `release.yml`'s
 `git verify-commit HEAD` right after PSR runs is a signing *smoke test* on the pre-merge commit
 (confirms the signing config works before spending a PR/CI/approval cycle on it), not the release's
 real verification gate. That's `git verify-tag`, run once against the pushed tag, immediately before
@@ -150,24 +194,34 @@ squash-merge would fire `release.yml` again on itself — harmless in the end (P
 new to release and no-op) but wasteful, and it would demand a second, redundant owner-approval click
 on the `release` environment for no real release.
 
-**Waiting for the merge to become possible, without reading check status directly:** the natural
+**Waiting for the merge to become possible, without reading check status directly:** the alternative
 design — poll `gh pr checks --required --watch` until `CI / required` reports success, then merge —
-runs into a real platform gap: fine-grained PATs (what `RELEASE_BOT_TOKEN` is) currently cannot call
-the Checks API at all (confirmed against GitHub's own fine-grained-PAT permissions reference — there
-is no selectable "Checks" repository permission for this token type; the closest options, "Actions"
-and the legacy "Commit statuses," don't reliably cover the check-run rollup a merge decision actually
-depends on, per multiple GitHub community reports). Rather than depend on scope this token
-structurally can't be granted, `release.yml` retries a **plain `gh pr merge`** on a 15-second
-interval instead: GitHub evaluates mergeability — including whether `CI / required` has actually
-passed — server-side, from the repository's own branch-protection state, independent of whatever the
-calling token can itself read. A "not mergeable yet" failure is the expected, retriable state while
-CI is still running on the PR; the loop is bounded (`deadline`/30 minutes) so a genuinely broken
-`CI / required` (or any other permanent merge blocker) fails the release job loudly instead of
-blocking the `release-main` concurrency queue indefinitely, at the cost of a slower failure than a
-check-status-aware wait would give for that specific case. `security.yml`'s pip-audit/CodeQL/zizmor
-jobs also run on this PR (nothing special-cases a release-bot PR out of them) but are advisory, not
-PR-blocking (see "Security workflow" below), so their runtime doesn't factor into how long the retry
-loop needs to wait.
+would work fine with the token this pipeline actually uses: `RELEASE_BOT_TOKEN` is a **classic** PAT
+(see SECURITY.md's "Secrets Management" and setup checklist for why classic, not fine-grained —
+fine-grained PATs can't be issued by an account that's only an outside collaborator on a
+personal-account-owned repo), and classic PATs can call the Checks API without restriction. So the
+retry-loop design below is a deliberate choice on its own merits, not a workaround forced by a
+permission gap: `release.yml` retries a **plain `gh pr merge`** on a 15-second interval, relying on
+GitHub evaluating mergeability — including whether `CI / required` has actually passed — server-side,
+from the repository's own branch-protection state, independent of whatever the calling token can
+itself read. That's a simpler dependency to reason about than a separate check-status poll, and it
+happens to also sidestep a real, separate constraint should this project ever migrate `RELEASE_BOT_TOKEN`
+back to a fine-grained PAT in the future (e.g. if `shipsolid/repo-policy` moves to an org): fine-grained
+PATs currently cannot call the Checks API at all (confirmed against GitHub's own fine-grained-PAT
+permissions reference — there is no selectable "Checks" repository permission for that token type;
+the closest options, "Actions" and the legacy "Commit statuses," don't reliably cover the check-run
+rollup a merge decision actually depends on, per multiple GitHub community reports). A "not mergeable
+yet" failure is the expected, retriable state while CI is still running on the PR; the loop is
+bounded (`deadline`/30 minutes) so a genuinely broken `CI / required` (or any other permanent merge
+blocker) fails the release job loudly instead of blocking the `release-main` concurrency queue
+indefinitely, at the cost of a slower failure than a check-status-aware wait would give for that
+specific case. The loop also classifies a handful of `gh pr merge` failure messages (grounded in
+`gh`'s own CLI source, not guesswork) as non-retriable — a real merge conflict or a stale base branch
+can never resolve just by retrying, so those fail fast instead of burning the full 30 minutes — see
+`release.yml`'s own comment on that step for the exact classification and reasoning.
+`security.yml`'s pip-audit/CodeQL/zizmor jobs also run on this PR (nothing special-cases a
+release-bot PR out of them) but are advisory, not PR-blocking (see "Security workflow" below), so
+their runtime doesn't factor into how long the retry loop needs to wait.
 
 **The owner-approval gate:** the `release` job now declares `environment: release`. Once that
 environment exists with a required-reviewer protection rule (see `SECURITY.md`'s setup checklist),
@@ -184,17 +238,25 @@ Single `main` branch, no long-lived release branches. Every release is still com
 own history by `python-semantic-release` reading Conventional Commits since the last release tag;
 the only branch involved is the release-bot's own short-lived `release-bot/v{version}` branch (Task
 10), which exists solely to carry the version-bump commit through the required pull request and is
-deleted immediately on merge (`gh pr merge --delete-branch`).
+deleted on merge by the repository's own `delete_branch_on_merge: true` self-policy setting
+(`.github/repository-policy.yml`) — not by a `--delete-branch` flag on the merge call itself; see
+"Waiting for the merge to become possible..." above for why the two were deliberately decoupled.
 
 ## Release Process
 
 1. A commit lands on `main` (via a merged PR — nothing can push directly to `main` since Task 9).
 2. `release.yml`'s `ci` job runs the full CI job graph (lint, typecheck, test, build, security)
-   against that commit. If any of it fails, nothing below happens — the `release` and `publish`
-   jobs are skipped, not just conditioned to no-op.
-3. `release` waits for a human to approve the `release` GitHub Environment (see "The owner-approval
-   gate" above and `SECURITY.md`'s setup checklist). Once approved, `python-semantic-release`
-   inspects commits since the last release tag:
+   against that commit, and its `check-release-warranted` job (no `environment:` gate, so no
+   approval wait) runs in parallel, installing the pinned `python-semantic-release` CLI directly and
+   running `semantic-release --strict version --print-tag` to determine, with zero side effects,
+   whether this commit's history actually warrants a release. If CI fails, nothing below happens —
+   `release`/`publish`/etc. are skipped. If `check-release-warranted` says no release is warranted
+   (e.g. a `chore:`/`docs:`-only push), `release` is skipped too, **without ever reaching the
+   approval gate below** — see "The owner-approval gate" above for why this matters given
+   `concurrency: release-main`.
+3. If a release is warranted, `release` waits for a human to approve the `release` GitHub
+   Environment (see "The owner-approval gate" above and `SECURITY.md`'s setup checklist). Once
+   approved, `python-semantic-release` inspects commits since the last release tag:
    - `feat: ...` → minor bump
    - `fix: ...` → patch bump
    - `feat!: ...` or a `BREAKING CHANGE:` footer → major bump
@@ -204,22 +266,33 @@ deleted immediately on merge (`gh pr merge --delete-branch`).
    `[tool.semantic_release]` — both must be listed, or they silently diverge; this happened once
    in production, see `docs/test-strategy.md`), regenerates `CHANGELOG.md`, and creates a **local**,
    release-bot-signed commit (`chore(release): {version}`) and tag (`v{version}`) — neither is
-   pushed yet.
+   pushed yet. (Host-side git signing config for this and every later signing/verification step in
+   the job is set up once, right after checkout, before this step — see "Host-side vs.
+   container-side signing config" below.)
 5. The workflow diffs that local commit against the pre-release commit and fails the job if it
    touched anything other than `pyproject.toml`, `src/repo_policy/__init__.py`, and
    `CHANGELOG.md` — an early, fail-fast copy of the check in step 8, against a compromised or
    misbehaving semantic-release run silently slipping in an unrelated code change.
 6. The release-bot pushes a `release-bot/v{version}` branch and opens a pull request into `main`.
-7. The workflow waits for that PR's required check (`CI / required`) and squash-merges it as the
-   release-bot, with `[skip ci]` added to the squash commit's own message (not present earlier —
-   see "Why `[skip ci]` moved..." above) so the merge doesn't re-trigger this same workflow.
-8. The workflow diffs the now-merged commit on `main` against the pre-release commit — the
-   re-scoped, real copy of step 5's check, since GitHub's squash-merge always creates a new commit
-   distinct from the one diffed in step 5.
-9. The release-bot creates, signs, and pushes the `v{version}` tag directly against that merged
-   commit (tags are outside branch protection's scope — see "Tag protection vs. branch protection"
-   above), then verifies its own signature with `git verify-tag` before anything below runs. The
-   floating major tag (`v0` until a `1.0.0` ships — see README) is force-moved to point at it, and
+7. The workflow retries `gh pr merge --squash` against that PR (skipping straight through if a
+   previous, timed-out run already merged it) until GitHub's own server-side mergeability check
+   passes — which depends on the PR's `CI / required` — or a genuinely non-retriable failure (a real
+   merge conflict, a stale base branch) is detected and fails fast instead of waiting out the full
+   30-minute budget. `[skip ci]` is added to the squash commit's own message (not present earlier —
+   see "Why `[skip ci]` moved..." above) so the merge doesn't re-trigger this same workflow. It then
+   reads back the exact commit the merge produced (`gh pr view --json mergeCommit`) for the next two
+   steps to use.
+8. The workflow diffs that exact merged commit against its own immediate parent — the re-scoped,
+   real copy of step 5's check, since GitHub's squash-merge always creates a new commit distinct
+   from the one diffed in step 5. This uses the commit captured in step 7, not a fresh
+   `git rev-parse origin/main`, so it can't be thrown off by an unrelated commit landing on `main`
+   in the meantime.
+9. The release-bot creates, signs, and pushes the `v{version}` tag directly against that same
+   captured commit (tags are outside branch protection's scope — see "Tag protection vs. branch
+   protection" above), then verifies its own signature with `git verify-tag` before anything below
+   runs. The floating major tag (`v0` until a `1.0.0` ships — see README) is force-moved to point at
+   it (with tag signing disabled for just that one command — see "Host-side vs. container-side
+   signing config" below for why that's necessary and safe), and
    `semantic-release changelog --post-to-release-tag` creates the GitHub release for it.
 10. The built sdist/wheel (built locally in step 4, before any of the push/PR/merge machinery
     above — their file contents don't change when the surrounding commit gets squashed) are handed
@@ -243,7 +316,8 @@ Each job in `release.yml` carries only the permission its own steps need:
 | Job | Permissions | Why |
 |---|---|---|
 | `ci` | `contents: read` | Only checks out code to lint/type-check/test/build. |
-| `release` | `contents: read` (default token); real write access comes from `secrets.RELEASE_BOT_TOKEN` instead | Every push, PR open/merge, tag push, and GitHub-release creation in this job authenticates as the release-bot via its own PAT, not the workflow's ambient `GITHUB_TOKEN` — so the default token's own `permissions:` grant stays at read-only. Gated behind the `environment: release` approval; `RELEASE_BOT_TOKEN` and the SSH signing key are environment secrets, not repository secrets, so they don't exist on the runner until a human approves. |
+| `check-release-warranted` | `contents: read` | Read-only: checks out `main`'s history and runs `semantic-release --strict version --print-tag`, which has no commit/tag/push side effects. No `environment:` gate — see "The owner-approval gate" below for why that's the point. |
+| `release` | `contents: read` (default token); real write access comes from `secrets.RELEASE_BOT_TOKEN` instead | Every push, PR open/merge, tag push, and GitHub-release creation in this job authenticates as the release-bot via its own PAT, not the workflow's ambient `GITHUB_TOKEN` — so the default token's own `permissions:` grant stays at read-only. Gated behind the `environment: release` approval (only reached when `check-release-warranted` says a release is warranted); `RELEASE_BOT_TOKEN` and the SSH signing key are environment secrets, not repository secrets, so they don't exist on the runner until a human approves. |
 | `publish` | `id-token: write` | OIDC trusted publishing only — never checks out the repo, never sees `contents: write`. |
 | `sbom` | `contents: read`, `id-token: write`, `attestations: write` | Generates SBOMs and signs Sigstore-backed attestations. Its own steps (installing a PyPI package, `docker build`, `pip install` a built wheel) aren't narrow enough to also trust with `contents: write` in the same job — see "SBOM and provenance" below for why that matters concretely (PyPI trusted publishing matches on repository + workflow filename). |
 | `release-assets` | `contents: write` only | Attaches the SBOMs `sbom` produced to the GitHub release. Never checks out the repo and never holds `id-token: write` — mirrors the `release`/`publish` split for the same reason. |
