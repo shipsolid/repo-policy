@@ -51,6 +51,21 @@ recently removed from the config, and whether `strict` is set at the top level (
 default to every branch unless overridden). This never touches a ruleset that isn't named
 `repo-policy:*`.
 
+## `could not initialize GitHub client: ...` (exit code 2)
+
+`repo-policy` sits behind an `httpx.Client`, which honors the standard proxy environment
+variables: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` (comma-separated hostnames to
+bypass the proxy for). `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` may use `http://`, `https://`,
+`socks5://`, or `socks5h://` schemes — SOCKS support ships by default (via the `httpx[socks]`
+extra), so no separate install step is needed.
+
+If GitHub client construction itself fails (not a request — the client never got far enough to
+make one), this is always a setup problem, not policy drift: it exits `2`
+(`EXIT_CONFIG_ERROR`), the same code as a missing token or malformed `--repo`, never `1`
+(`EXIT_DRIFT`) and never an uncaught traceback. Check the accompanying message — it names what's
+likely wrong (e.g. an unreachable or malformed proxy URL). If you're running against a mirrored
+or vendored install that dropped the `httpx[socks]` extra, reinstall `repo-policy` to restore it.
+
 ## Docker image fails to build with `Readme file does not exist: README.md`
 
 If you're building the `Dockerfile` yourself: it must be built with the repo root as build

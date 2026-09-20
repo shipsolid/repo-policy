@@ -82,13 +82,37 @@ def _build_client(
 ) -> tuple[PolicyConfig, str, GitHubClient]:
     """Shared setup for _run_check (audit/plan) and apply: load the policy, resolve the target
     repository, and construct the GitHub client. ConfigError (from load_policy) and
-    click.ClickException (from _resolve_repo/_split_repo/_resolve_token) both propagate uncaught
-    -- each caller keeps its own ConfigError exit-code handling, while ClickException is already
-    handled automatically by click's own command dispatch."""
+    click.ClickException (from _resolve_repo/_split_repo/_resolve_token, and now also from a
+    failed GitHubClient(...) construction below) all propagate uncaught -- each caller keeps its
+    own ConfigError exit-code handling, while click.ClickException is already handled
+    automatically by click's own command dispatch: Command.main() wraps the entire
+    self.invoke(ctx) call (the whole group -> subcommand dispatch chain) in a single
+    `except ClickException` that calls e.show() and sys.exit(e.exit_code), regardless of how deep
+    in the call stack the exception was raised -- so neither _run_check nor apply needs its own
+    except block for it.
+
+    A GitHubClient(...) construction failure (e.g. ImportError: 'socksio' is not installed, when
+    a SOCKS-scheme proxy env var like ALL_PROXY=socks5h://... is set but the httpx[socks] extra
+    is missing) previously propagated as a raw, uncaught exception -- surfacing as a Python
+    traceback with Python's own default exit code, which could collide with this CLI's
+    EXIT_DRIFT (1) and make it impossible for a CI pipeline branching on exit code to tell
+    "proxy/setup is broken" apart from "there's real policy drift". It's a setup problem, not
+    drift and not an attempted-and-failed API call, so it's wrapped into the same
+    _ConfigClickException (exit 2) as every other config/setup failure above."""
     config = load_policy(config_path)
     resolved_repo = _resolve_repo(repo)
     owner, name = _split_repo(resolved_repo)
-    client = GitHubClient(token=_resolve_token(token), owner=owner, repo=name)
+    token_value = _resolve_token(token)
+    try:
+        client = GitHubClient(token=token_value, owner=owner, repo=name)
+    except Exception as exc:
+        raise _config_error(
+            f"could not initialize GitHub client: {exc}; this is usually a proxy "
+            "misconfiguration -- check HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY, and if you're "
+            "using a SOCKS proxy (socks5/socks5h/socks4 scheme), confirm SOCKS support is "
+            "installed (this package depends on httpx[socks]; reinstall repo-policy if it's "
+            "missing)"
+        ) from exc
     return config, resolved_repo, client
 
 

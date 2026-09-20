@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
 from repo_policy.cli import main
-from repo_policy.github_client import GitHubAPIError
+from repo_policy.github_client import GitHubAPIError, GitHubClient
 
 
 def test_validate_exits_0_on_valid_config():
@@ -509,3 +509,44 @@ def test_apply_exits_3_and_reports_partial_success_when_a_repo_setting_mutation_
     assert result.exit_code == 3
     assert "repo settings: vulnerability_alerts: applied" in result.output
     assert "repo settings: automated_security_fixes: failed" in result.output
+
+
+@patch("repo_policy.cli.GitHubClient")
+def test_audit_reports_config_error_when_client_construction_fails_under_proxy_misconfiguration(
+    mock_client_cls,
+):
+    """Task 5: a SOCKS-scheme proxy env var (e.g. ALL_PROXY=socks5h://...) without the optional
+    `socksio` package makes httpx.Client(...) raise ImportError inside GitHubClient.__init__ --
+    previously this propagated uncaught, surfacing as a raw traceback with Python's default exit
+    code (colliding with EXIT_DRIFT == 1, making it impossible for a CI pipeline branching on exit
+    code to tell "proxy/setup is broken" apart from "there's real policy drift"). Client-
+    construction failures of any kind must become a clean, actionable EXIT_CONFIG_ERROR (2)."""
+    mock_client_cls.side_effect = ImportError(
+        "Using SOCKS proxy, but the 'socksio' package is not installed. Make sure to install "
+        "httpx using `pip install httpx[socks]`."
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "audit",
+            "--config", "tests/fixtures/policy_no_requirements.yml",
+            "--repo", "acme/widgets",
+            "--token", "t",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    output_lower = result.output.lower()
+    assert "proxy" in output_lower
+    assert "socks" in output_lower
+
+
+def test_github_client_construction_succeeds_under_a_socks_proxy_environment(monkeypatch):
+    """Task 5: with the `httpx[socks]` extra installed, a SOCKS-scheme proxy env var must not
+    raise ImportError at client-construction time -- this is what makes the exit-2 wrapping in
+    _build_client a true "predictable exit code" rather than a permanent workaround papering over
+    a broken default install. No request is performed -- construction and close only."""
+    monkeypatch.setenv("ALL_PROXY", "socks5h://127.0.0.1:9")
+    client = GitHubClient(token="t", owner="acme", repo="widgets")
+    client.close()
