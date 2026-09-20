@@ -278,9 +278,11 @@ If the private signing key or `RELEASE_BOT_TOKEN` is suspected compromised, trea
 not a routine rotation:
 
 1. **Immediately** remove the signing key from the bot's GitHub account (Settings → SSH and GPG
-   keys → delete) and revoke/regenerate `RELEASE_BOT_TOKEN` (GitHub → Developer settings → the fine-
-   grained PAT → regenerate or delete) from the bot's account. This stops the key from producing any
-   further "Verified" releases and stops the PAT from opening/merging any further PRs, immediately.
+   keys → delete) and revoke/regenerate `RELEASE_BOT_TOKEN` (GitHub → Developer settings → Personal
+   access tokens → Tokens (classic) — this is a classic PAT, not a fine-grained one, see "Repository
+   access and credentials" above — → regenerate or delete) from the bot's account. This stops the
+   key from producing any further "Verified" releases and stops the PAT from opening/merging any
+   further PRs, immediately.
 2. Delete both from the `release` GitHub Environment's secrets so a queued or in-flight workflow run
    can't pick up the now-revoked credential.
 3. Audit recent releases (`git log --show-signature` on release tags, or the GitHub UI's Verified
