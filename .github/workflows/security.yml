@@ -1,0 +1,97 @@
+name: Security
+
+# Runs independently of ci.yml's release-gating job graph -- see ci.yml's `security` job (zizmor
+# over workflow YAML only, Task 6), which was deliberately scoped narrow and explicitly documented
+# "pip-audit, CodeQL, and a scheduled security.yml are a separate, dedicated workflow added later."
+# This is that workflow: dependency-vulnerability scanning (pip-audit) against this project's own
+# environment, static analysis of both the Python source and the GitHub Actions workflow YAML
+# (CodeQL), and a second, weekly-scheduled zizmor pass. None of these jobs are added to ci.yml's
+# `required` job -- this is an advisory/reporting surface (PR-visible plus a weekly cadence), not a
+# second PR-blocking gate duplicating ci.yml's `security` job. See docs/ci-cd.md and SECURITY.md's
+# "Vulnerability Management" section for the resulting triage process and response times.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
+
+# No job inherits repo-default permissions; each job below declares exactly what it needs.
+permissions: {}
+
+jobs:
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]" pip-audit
+
+      - name: Audit the project's own runtime + dev dependency set
+        run: pip-audit
+
+      # requirements-action.txt is a second, independently-locked dependency set (the Docker
+      # Action's install, hash-pinned via `uv pip compile --generate-hashes` -- see Task 7 /
+      # scripts/verify-action-lock.sh) that pip-audit's environment scan above never sees, since
+      # it isn't installed into this job's Python environment.
+      - name: Audit the Docker Action's locked, hash-pinned dependency set
+        run: pip-audit -r requirements-action.txt --require-hashes
+
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: pip install zizmor==1.30.1
+      # --min-severity high: same threshold ci.yml's own `security` job (Task 6) applies, and for
+      # the same reason -- --pedantic surfaces advisory-level findings (concurrency-limits,
+      # artipacked on jobs that legitimately need push credentials, etc.) that this repository
+      # tolerates today (see docs/ci-cd.md). Without the floor, this job would fail on every single
+      # run regardless of whether anything real changed. That would be tolerable on a PR-blocking
+      # gate only in the sense that it's already true of ci.yml's job -- but this workflow isn't
+      # PR-blocking at all (see the top-of-file note), so an unconditionally-red job here would be
+      # pure alert fatigue with no corresponding safety benefit: nobody would ever be able to tell
+      # a real new high-severity finding apart from the permanent baseline noise.
+      - run: zizmor --pedantic --offline --min-severity high .github/workflows
+
+  codeql:
+    name: codeql (${{ matrix.language }})
+    # SHA-pinned advanced workflow (not GitHub's "default setup"): default setup is a repository
+    # settings toggle configured outside of version control, which this workflow-as-code approach
+    # deliberately avoids -- see Task 8's scope notes for why default setup isn't used here.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # required to upload SARIF results to the code-scanning API
+      actions: read # lets the CodeQL Action read this workflow run's own context; GitHub's own advanced-setup template default
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, actions]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4 (currently v4.38.1)
+        with:
+          languages: ${{ matrix.language }}
+          # Both languages analyzed here are interpreted/declarative (Python source, GitHub
+          # Actions workflow YAML) -- nothing to compile, so no autobuild/manual-build step exists
+          # in this job at all.
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4 (currently v4.38.1)
+        with:
+          category: "/language:${{ matrix.language }}"

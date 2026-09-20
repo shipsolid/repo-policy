@@ -1,0 +1,46 @@
+# Weekly, grouped dependency-update proposals -- one PR per ecosystem per week (not one PR per
+# package) via each entry's single all-dependencies group below.
+#
+# Known friction, documented rather than silently worked around: requirements-action.txt is a
+# uv --generate-hashes lockfile (see requirements-action.in's own comment and
+# scripts/verify-action-lock.sh), not a pip-compile lockfile -- Dependabot's pip-compile-aware
+# update path only recognizes the latter's header comment. Dependabot may therefore propose direct
+# hash updates to requirements-action.txt that don't byte-match a fresh `uv pip compile
+# --generate-hashes` run and fail CI's verify-action-lock job. That failure is expected and
+# informative (it still names the package/version to bump); the fix is to close that PR and
+# regenerate the lock by hand with the command verify-action-lock.sh's own failure message prints,
+# not to merge Dependabot's version of the file.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      pip-dependencies:
+        patterns: ["*"]
+    labels: ["dependencies", "security"]
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions-dependencies:
+        patterns: ["*"]
+    labels: ["dependencies", "security"]
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      docker-dependencies:
+        patterns: ["*"]
+    labels: ["dependencies", "security"]
+    cooldown:
+      default-days: 7

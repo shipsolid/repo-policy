@@ -57,15 +57,120 @@ restrict itself to a subset. This is why token scoping (above) is the primary co
 
 ## Vulnerability Management
 
-This project has no automated dependency-vulnerability scanning configured yet (see
-`docs/ci-cd.md` / `ROADMAP.md`). Dependency upper bounds are pinned in `pyproject.toml` to reduce
-the blast radius of an unreviewed transitive upgrade, but that is not a substitute for scanning.
+### Scan cadence
+
+| Check | Tool | Runs | Scope |
+|---|---|---|---|
+| Dependency vulnerabilities | `pip-audit` | Every PR, every push to `main`, weekly (`.github/workflows/security.yml`) | This project's own dependencies (`pyproject.toml`) and the Docker Action's locked, hash-pinned dependency set (`requirements-action.txt`) |
+| Static code analysis | CodeQL (`python`, `actions`) | Every PR, every push to `main`, weekly | `src/`, `tests/`, and `.github/workflows/*.yml` |
+| Workflow YAML security | `zizmor --pedantic` | Every PR, every push to `main` (`ci.yml`'s `security` job, PR-blocking), weekly again (`security.yml`, advisory) | `.github/workflows/*.yml` |
+| Container image vulnerabilities | Trivy (Task 7) | Every PR, every push to `main` (`ci.yml`'s `docker` job) | The Docker Action image, `CRITICAL` blocking / `CRITICAL,HIGH` reported |
+| Dependency update proposals | Dependabot (`.github/dependabot.yml`) | Weekly, grouped per ecosystem (`pip`, `github-actions`, `docker`), with a 7-day cooldown before a newly-published version is proposed | Every dependency this project or its Docker image declares |
+
+`security.yml`'s pip-audit/zizmor/CodeQL jobs are advisory, not PR-blocking -- they are not part of
+`ci.yml`'s `required` check. `ci.yml`'s own narrower `security` job (zizmor over workflow YAML
+only, `--min-severity high`) remains the one PR-blocking security gate, unchanged by this. See
+`docs/ci-cd.md` for the full pipeline architecture and the reasoning behind that split.
+
+### Severity response times
+
+These are target response times for a finding surfaced by any of the scans above, not a
+contractual SLA:
+
+| Severity | Response |
+|---|---|
+| Critical / High | Triaged within 5 business days; fixed or explicitly risk-accepted (with reasoning recorded here or in the relevant PR) before the next release |
+| Medium | Triaged within 2 weeks; fixed opportunistically, typically bundled with the next `fix:`/`chore:` commit touching the same area |
+| Low / Informational | Reviewed on a best-effort basis; commonly tolerated as documented, known findings (see `docs/ci-cd.md`'s zizmor discussion) rather than fixed individually |
+
+### Dependency-update policy
+
+- Dependency upper bounds are pinned in `pyproject.toml` to bound the blast radius of an
+  unreviewed transitive upgrade; Dependabot's weekly, grouped PRs are the mechanism that actually
+  proposes moving those pins forward, rather than upper bounds alone going stale indefinitely.
+- The 7-day cooldown (`dependabot.yml`'s `cooldown.default-days`) means a newly-published package
+  version isn't proposed the same day it lands on PyPI/the Actions marketplace/Docker Hub -- a
+  deliberate window against a compromised-release supply-chain attack landing in a merged PR
+  before it's been caught and yanked upstream.
+- A Dependabot PR against `requirements-action.txt` specifically may fail CI's
+  `verify-action-lock` check even when the underlying version bump is legitimate, because that
+  file is a `uv --generate-hashes` lockfile, not one Dependabot's pip-compile-aware update path
+  recognizes (see `dependabot.yml`'s own comment). Regenerate it by hand with the command
+  `verify-action-lock.sh`'s failure output prints; don't merge Dependabot's version of that file
+  directly.
+
+### Verifying release artifacts
+
+Every release (`v0.1.4` onward) publishes, alongside the PyPI package: a CycloneDX SBOM for the
+wheel's install environment and one for the Docker Action image (both attached to the GitHub
+release), plus GitHub artifact attestations (Sigstore-backed build provenance) for the wheel,
+sdist, both SBOMs, and the Docker Action image (by digest). To verify a downloaded artifact's
+provenance:
+
+```bash
+# Verify the wheel/sdist/SBOM attestations (requires the GitHub CLI, `gh`, and repo read access)
+gh attestation verify dist/repo_policy-<version>-py3-none-any.whl --owner shipsolid
+gh attestation verify dist/repo_policy-<version>.tar.gz --owner shipsolid
+gh attestation verify sbom-wheel.cdx.json --owner shipsolid
+gh attestation verify sbom-docker.cdx.json --owner shipsolid
+```
+
+The SBOMs themselves (`sbom-wheel.cdx.json`, `sbom-docker.cdx.json`) are downloadable from each
+GitHub release's assets and are valid CycloneDX 1.6 JSON -- validate structurally with any
+CycloneDX-compliant tool, e.g. `cyclonedx-py`'s own `--validate` (on by default) or
+[cyclonedx-cli](https://github.com/CycloneDX/cyclonedx-cli) `validate --input-file
+sbom-wheel.cdx.json`.
+
+**Known limitation -- the Docker Action image's attestation cannot currently be verified with a
+single command.** `gh attestation verify` requires either a local file path or a
+registry-resolvable `oci://` reference to recompute the subject's digest and compare it against
+the signed record (confirmed against `gh`'s own documentation). This repository never pushes the
+Docker Action image to a registry -- `action.yml` builds it fresh from the pinned `Dockerfile` at
+consumption time (see Task 7) -- so there is no `oci://` reference to verify against, and a
+`docker save` tarball's own hash doesn't match the registry-style image digest the attestation was
+signed for. The attestation is still real and auditable (visible under the repository's
+Attestations tab on GitHub, and fetchable directly by digest via `GET
+/repos/shipsolid/repo-policy/attestations/<digest>`), but turning it into a one-command local
+verification would require either publishing the image to a registry (`ghcr.io` or Docker Hub) as
+a future enhancement, or standing up a local registry to give the rebuilt image a resolvable
+`oci://` reference. Until then, trust in a specific release's image rests on Task 7's
+reproducibility guarantee (digest-pinned base image + hash-locked dependencies): rebuild from the
+same tag's `Dockerfile` and compare `docker inspect --format='{{.Id}}'` output against the digest
+recorded in the workflow run's logs / the attestation itself.
 
 ## Security Baseline
 
 - Dependencies pinned with upper bounds (`pyproject.toml`).
 - PyPI publishing uses trusted publishing (OIDC) — no long-lived PyPI API token stored anywhere.
 - No secrets, tokens, or credentials are ever persisted by repo-policy itself.
+- Automated dependency-vulnerability scanning (`pip-audit`), static analysis (CodeQL), and workflow
+  security linting (`zizmor`) run on every PR, every push to `main`, and weekly
+  (`.github/workflows/security.yml`); Dependabot proposes grouped, weekly dependency updates with a
+  7-day cooldown (`.github/dependabot.yml`). See "Vulnerability Management" above.
+- Every release publishes CycloneDX SBOMs (wheel + Docker Action image) and GitHub artifact
+  attestations (Sigstore-backed build provenance) for the wheel, sdist, both SBOMs, and the Docker
+  image. See "Verifying release artifacts" above.
+
+## Repository Settings Not Yet Enabled
+
+The following are GitHub repository-settings toggles (Settings → Code security), not something
+expressible in a workflow file — recorded here as an open action item rather than silently
+skipped:
+
+- **Secret scanning** — Settings → Code security → Secret scanning → Enable. Flags secrets
+  matching known provider patterns that get committed to the repository.
+- **Push protection** — same page, enabled after secret scanning is on. Blocks a `git push`
+  containing a detected secret before it ever lands in the repository's history, rather than only
+  flagging it after the fact.
+
+Both are available on public repositories at no cost, and on private repositories with GitHub
+Advanced Security. Neither is enabled by anything in this repository's version-controlled
+configuration — enabling them requires repository-admin access to the GitHub UI (or the REST API's
+`PATCH /repos/{owner}/{repo}` `security_and_analysis` field, the same endpoint `repo-policy`
+itself already manages other `security_and_analysis` sub-settings through — see
+`github_client.py`'s `update_security_and_analysis`). Turning these two on for
+`shipsolid/repo-policy` itself is an action item for whoever holds admin access, not something
+this codebase change can complete.
 
 ## Known Limitations
 
@@ -74,3 +179,16 @@ the blast radius of an unreviewed transitive upgrade, but that is not a substitu
   field extension in the future; the current schema has no such field, so this is currently moot.
 - See the Threat Model above for the PAT-scope and `policy.yml`-review gaps, which are
   organizational controls repo-policy cannot enforce on your behalf.
+- `bandit -q -r src` reports one Medium-severity finding, `B506` (`yaml_load`) at
+  `config.py:103`, on `yaml.load(raw_text, Loader=_StrictLoader)`. This is a documented false
+  positive: `_StrictLoader` (`config.py:17`) is a subclass of `yaml.SafeLoader`, not `yaml.Loader`
+  — it only narrows two of SafeLoader's own implicit-resolver surprises (the yes/no/on/off bool
+  words, and octal/sexagesimal ints) and rejects duplicate mapping keys; it never adds a
+  constructor capable of instantiating arbitrary Python objects, so it carries exactly the same
+  safety guarantee as `yaml.safe_load()` itself. Bandit's `B506` check flags any `yaml.load(...,
+  Loader=...)` call pattern regardless of which Loader class is actually passed, so it can't
+  distinguish this from a genuinely unsafe `Loader=yaml.Loader`. Not suppressed with `# nosec`
+  in-source because `bandit` isn't wired into either CI workflow (see `docs/ci-cd.md`'s "Security
+  workflow" section for why CodeQL's Python analysis is the automated static-analysis coverage
+  instead) — there is no gate for a source-level suppression to silence, only this note for the
+  next person who runs `bandit` locally and sees the same finding.

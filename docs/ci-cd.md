@@ -5,7 +5,8 @@
 | Workflow | File | Trigger | Purpose |
 |---|---|---|---|
 | CI | `.github/workflows/ci.yml` | every PR, push to `main`, and as a reusable workflow called from Release | lint, typecheck, unit tests, package build, workflow security scan |
-| Release | `.github/workflows/release.yml` | push to `main` | run CI, then (if CI passes) version bump, changelog, git tag, floating major tag, PyPI publish |
+| Release | `.github/workflows/release.yml` | push to `main` | run CI, then (if CI passes) version bump, changelog, git tag, floating major tag, PyPI publish, SBOM generation, artifact attestation |
+| Security | `.github/workflows/security.yml` | every PR, push to `main`, weekly schedule | dependency-vulnerability scanning (pip-audit), static code analysis (CodeQL: Python + Actions), a second, weekly zizmor pass -- advisory/reporting, not PR-blocking (see below) |
 
 The pre-gating version of both workflows ran green on real GitHub Actions runners, not just
 locally (see `docs/test-strategy.md` for the project's general stance on real-vs-mocked
@@ -24,8 +25,9 @@ name, `CI / required`, that doesn't change as jobs are added or removed. Each jo
 minimal `permissions:` (`contents: read`); the workflow-level default is `permissions: {}`.
 
 `security` here is narrowly scoped to this repo's own workflow files — it is not dependency
-scanning. `pip-audit`, CodeQL, and a scheduled `security.yml` are a separate, later addition (see
-the audit-remediation plan's Task 8); this job only covers what gates releases today.
+scanning. `pip-audit`, CodeQL, and a scheduled `security.yml` were the separate, later addition
+Task 6 anticipated — see "Security workflow: pip-audit, CodeQL, and a second zizmor pass" below.
+This job only covers what gates releases today; it remains the one PR-blocking security check.
 
 ### CI gates Release: same-workflow dependency, not `workflow_run`
 
@@ -84,6 +86,14 @@ Single `main` branch. No release branches; every release is cut directly from `m
 7. The built sdist/wheel are handed off (via `actions/upload-artifact` / `download-artifact`) to a
    separate `publish` job, and published to PyPI via trusted publishing (OIDC) — no long-lived API
    token stored in the repo.
+8. In parallel with `publish`, a separate `provenance` job (Task 8) re-checks out the exact
+   released commit (by tag, since `release`'s own push moved `main` past `github.sha`), generates
+   a CycloneDX SBOM for the wheel's install environment and one for the Docker Action image
+   (built fresh from the release commit's `Dockerfile`), signs GitHub artifact attestations
+   (Sigstore-backed build provenance) for the wheel, sdist, both SBOMs, and the Docker image (by
+   digest), and attaches the two SBOM files to the GitHub release `release`'s own
+   python-semantic-release step already created. See "SBOM and provenance (`provenance` job)"
+   below and `SECURITY.md`'s "Verifying release artifacts" for how to check these.
 
 ### Permission scoping and concurrency
 
@@ -94,6 +104,7 @@ Each job in `release.yml` carries only the permission its own steps need:
 | `ci` | `contents: read` | Only checks out code to lint/type-check/test/build. |
 | `release` | `contents: write` | Pushes the semantic-release commit and moves the floating tag. |
 | `publish` | `id-token: write` | OIDC trusted publishing only — never checks out the repo, never sees `contents: write`. |
+| `provenance` | `contents: write`, `id-token: write`, `attestations: write` | Attaches SBOMs to the GitHub release (`contents: write`) and signs Sigstore-backed attestations (`id-token: write` + `attestations: write`) — a distinct permission combination from both `release` and `publish`, so it's a third job rather than added to either. |
 
 The workflow-level default is `permissions: {}`; nothing falls back to the repository's broader
 default token permissions.
@@ -137,6 +148,81 @@ publishing has to be pre-registered on PyPI before the first attempt, it isn't p
 `permissions: id-token: write` alone). Those three git tags and GitHub releases exist but were
 never published to PyPI, and — since PyPI never allows re-uploading a consumed version number —
 never will be; `pip install repo-policy` starts at `0.1.3`. `v0.1.3` onward publish cleanly.
+
+## SBOM and provenance (`provenance` job)
+
+Added in Task 8, alongside `pip-audit`/CodeQL/`security.yml` — see "Security workflow" below for
+those; this section is specifically about what happens per-release.
+
+The `provenance` job (see the permission-scoping table above) runs after `release` succeeds, in
+parallel with `publish`:
+
+1. Checks out the exact released commit by tag (`needs.release.outputs.tag`) — not `github.sha`,
+   which by this point in the workflow run points at that commit's *parent* (`release`'s own
+   version-bump commit already moved `main` forward).
+2. Downloads the `dist/` artifact `release` uploaded (the built wheel + sdist).
+3. Installs the wheel into a throwaway venv and runs `cyclonedx-py environment` against it —
+   `sbom-wheel.cdx.json`, describing exactly what `pip install repo-policy` puts on disk, not just
+   the declared dependency ranges.
+4. Builds the Docker Action image fresh from the release commit's `Dockerfile` (a single build —
+   `ci.yml`'s own `docker` job already proved two-build reproducibility for this exact commit,
+   gated by `needs: ci`), extracts its installed-package list (`pip list --format=freeze`, the
+   same approach `ci.yml`'s `docker` job uses for its own inventory step), and runs `cyclonedx-py
+   requirements` against it — `sbom-docker.cdx.json`.
+5. Runs `actions/attest-build-provenance` twice: once (`subject-path`) covering the wheel, sdist,
+   and both SBOM files together, and once more (`subject-name` + `subject-digest`) for the Docker
+   image, since a file-based and a digest-based subject can't share one call.
+6. Uploads both SBOM files to the GitHub release as assets (`gh release upload`) — the release
+   object itself already exists by this point, created by `release`'s own
+   python-semantic-release step (which creates the VCS release but does not upload `dist/`
+   assets to it; PyPI, via the separate `publish` job, remains the actual package-install source).
+
+**Why the Docker image is attested by digest, not by registry reference:** this repository never
+pushes the Docker Action image to a registry — `action.yml` builds it fresh from the pinned
+`Dockerfile` at consumption time (see Task 7). The attestation therefore records the digest of the
+image `provenance` itself built from the release commit, not a `ghcr.io`/Docker Hub tag. Anyone
+who wants to independently verify it has to rebuild at the same tag and compare digests, relying
+on Task 7's reproducibility guarantee (digest-pinned base image + hash-locked dependencies) rather
+than on registry-hosted immutability. See `SECURITY.md`'s "Verifying release artifacts" for the
+exact `gh attestation verify` commands.
+
+**Cyclonedx tool note:** the PyPI package is `cyclonedx-bom`; the CLI it installs is `cyclonedx-py`
+— a package/command name mismatch worth knowing about when reading the workflow's `pip install
+cyclonedx-bom==<version>` step.
+
+## Security workflow: pip-audit, CodeQL, and a second zizmor pass
+
+`.github/workflows/security.yml` (Task 8) is the "separate, dedicated workflow added later" that
+`ci.yml`'s own `security` job (Task 6) explicitly deferred to. It runs on pull requests, every push
+to `main`, and a weekly schedule (Monday 06:00 UTC) — deliberately **not** added to `ci.yml`'s
+`required` job, so it doesn't duplicate that job's PR-blocking role or couple release velocity to,
+e.g., CodeQL's own multi-minute run time. Three jobs:
+
+- **`pip-audit`** — scans this project's own dependency set (`pyproject.toml`, via `pip install
+  -e ".[dev]"` then `pip-audit` against the resulting environment) and, separately, the Docker
+  Action's locked, hash-pinned dependency set (`pip-audit -r requirements-action.txt
+  --require-hashes`), since the two are independent and the second is never installed into this
+  job's own Python environment.
+- **`zizmor`** — `zizmor --pedantic --offline --min-severity high .github/workflows`, the same
+  invocation and the same `--min-severity high` threshold as `ci.yml`'s `security` job, for the
+  same reason (see that job's own comment): without a floor, `--pedantic`'s advisory-level
+  findings (concurrency-limits, artipacked, etc. — see the zizmor findings this repo currently
+  tolerates, documented inline in each workflow) would fail this job on every single run. Applying
+  the same threshold here, even though this workflow is advisory rather than PR-blocking, avoids
+  turning a scheduled security signal into permanent, uninformative noise.
+- **`codeql`** — a SHA-pinned advanced workflow (not GitHub's "default setup" repository-settings
+  toggle, which is live-repo state outside version control), matrixed over `language: [python,
+  actions]` with `build-mode: none` for both (nothing to compile — Python source and GitHub
+  Actions workflow YAML are both interpreted/declarative). Job permissions: `contents: read`,
+  `security-events: write` (upload SARIF results), `actions: read` (GitHub's own advanced-setup
+  template default, lets the CodeQL Action read this workflow run's own context).
+
+`bandit` is run locally as part of this task's own verification (see the audit-remediation plan's
+Task 8) but is intentionally not wired into either CI workflow — CodeQL's Python analysis is the
+automated static-analysis coverage; bandit's one recurring finding on this codebase (`B506`,
+`yaml.load` with a custom Loader) is a documented false positive, not something worth a second,
+redundant automated gate for. See `SECURITY.md`'s "Vulnerability Management" section for the
+resulting scan cadence, severity response times, and dependency-update policy.
 
 ## Rollback
 

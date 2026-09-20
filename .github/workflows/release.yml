@@ -42,6 +42,7 @@ jobs:
       contents: write # semantic-release commits the version bump/changelog and pushes the tag
     outputs:
       released: ${{ steps.release.outputs.released }}
+      tag: ${{ steps.release.outputs.tag }} # consumed by the `provenance` job below to checkout/tag/upload against the exact released commit
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -124,3 +125,105 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1 (currently v1.14.2)
+
+  provenance:
+    name: provenance
+    # Split from both `release` (contents: write, to push the version-bump commit/tag) and
+    # `publish` (id-token: write only, for PyPI OIDC -- never checks out the repo, never sees
+    # contents: write) for the same reason those two are split from each other: this job's own
+    # narrow job -- generate CycloneDX SBOMs for what `release` just built, sign build-provenance
+    # attestations for them, and attach the SBOMs to the GitHub release `release`'s own
+    # python-semantic-release step already created -- needs a permission combination (contents:
+    # write *and* id-token: write *and* attestations: write) that neither existing job should
+    # carry on top of what it already has. Runs in parallel with `publish`; PyPI's own outcome
+    # doesn't gate whether the release's build provenance gets recorded.
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release upload, to attach the SBOMs to the GitHub release
+      id-token: write # actions/attest-build-provenance: Sigstore OIDC signing
+      attestations: write # actions/attest-build-provenance: write the attestation to this repo's attestation store
+    steps:
+      # Checks out the exact released commit (the tag `release` just pushed), not github.sha --
+      # `release`'s own version-bump commit moved main forward past the commit that triggered this
+      # workflow run, so github.sha now points at that commit's *parent*.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dist
+          path: dist/
+
+      - run: pip install cyclonedx-bom==7.4.0 # provides the `cyclonedx-py` CLI (package/command name mismatch is intentional upstream)
+
+      # SBOM #1: the wheel's own install environment -- what `pip install repo-policy` actually
+      # puts on disk, not just its declared dependency ranges.
+      - name: Generate SBOM for the wheel install environment
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/wheel-env
+          /tmp/wheel-env/bin/pip install --quiet dist/*.whl
+          cyclonedx-py environment /tmp/wheel-env --pyproject pyproject.toml \
+            --output-reproducible -o sbom-wheel.cdx.json
+
+      # SBOM #2: the Docker Action image (Task 7) -- a single build here (unlike ci.yml's `docker`
+      # job, which builds twice to prove reproducibility; that guarantee is already established
+      # and gated by `needs: ci` above, so one build is enough to compute this release's SBOM).
+      - name: Build the Docker Action image at this release commit
+        env:
+          IMAGE_REF: repo-policy-action:${{ needs.release.outputs.tag }}
+        run: docker build -t "$IMAGE_REF" .
+
+      - name: Generate SBOM for the Docker Action image
+        env:
+          IMAGE_REF: repo-policy-action:${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint pip "$IMAGE_REF" list --format=freeze > docker-image-freeze.txt
+          cyclonedx-py requirements docker-image-freeze.txt --pyproject pyproject.toml \
+            --output-reproducible -o sbom-docker.cdx.json
+
+      # Attest the wheel, sdist, and both SBOMs against their exact published digests in one call
+      # (subject-path accepts a multi-line list of globs/paths).
+      - name: Attest wheel, sdist, and SBOMs
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4 (currently v4.2.2)
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+            sbom-wheel.cdx.json
+            sbom-docker.cdx.json
+
+      # The Docker Action image is never pushed to a registry (action.yml builds it fresh from the
+      # pinned Dockerfile at consumption time -- see Task 7); subject-path (file-based) and
+      # subject-digest (this case) are mutually exclusive inputs, so the image is attested in its
+      # own call, by the digest of the image this job just built from the release commit's
+      # Dockerfile. Task 7's reproducibility guarantee (digest-pinned base image + hash-locked
+      # deps) is what makes that digest independently reproducible/verifiable by anyone rebuilding
+      # at the same tag, despite never being pushed anywhere.
+      - name: Attest the Docker Action image
+        env:
+          IMAGE_REF: repo-policy-action:${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "IMAGE_DIGEST=$(docker inspect --format='{{.Id}}' "$IMAGE_REF")" >> "$GITHUB_ENV"
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4 (currently v4.2.2)
+        with:
+          subject-name: repo-policy-action
+          subject-digest: ${{ env.IMAGE_DIGEST }}
+
+      - name: Attach SBOMs to the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: gh release upload "$RELEASE_TAG" sbom-wheel.cdx.json sbom-docker.cdx.json --clobber

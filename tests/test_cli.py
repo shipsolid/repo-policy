@@ -550,3 +550,33 @@ def test_github_client_construction_succeeds_under_a_socks_proxy_environment(mon
     monkeypatch.setenv("ALL_PROXY", "socks5h://127.0.0.1:9")
     client = GitHubClient(token="t", owner="acme", repo="widgets")
     client.close()
+
+
+@patch("repo_policy.cli.GitHubClient")
+def test_cli_errors_never_leak_the_supplied_token(mock_client_cls):
+    """Task 8 security-hygiene regression test: the token supplied via --token flows into
+    GitHubClient solely to build the `Authorization: Bearer <token>` header (github_client.py's
+    __init__) -- it is never stored anywhere else and no code path is supposed to interpolate it
+    into a rendered message (see render.py's own docstring: "never a token or a full API
+    request/response payload"). This test forces a real failure (a GitHubAPIError, the same
+    exception type a live 401/403/500 response raises) on the first API call each of audit/plan/
+    apply makes, with a distinctive, easily-`grep`-able fake token supplied, and asserts that
+    token string never appears anywhere in stdout/stderr -- guarding against a future change that
+    accidentally interpolates the raw token into a GitHubAPIError message, a click exception, or
+    an uncaught traceback instead of the response text alone."""
+    secret_token = "ghp_ThisTokenMustNeverAppearInAnyCLIOutput000111"  # test fixture, not a real credential
+    mock_client = mock_client_cls.return_value.__enter__.return_value
+    mock_client.get_branch_protection.side_effect = GitHubAPIError(
+        "GitHub API error 401 on GET /repos/acme/widgets/branches/main/protection: Bad credentials",
+        status_code=401,
+    )
+    runner = CliRunner()
+    for args in (
+        ["audit", "--config", "tests/fixtures/policy_valid.yml", "--repo", "acme/widgets", "--token", secret_token],
+        ["plan", "--config", "tests/fixtures/policy_valid.yml", "--repo", "acme/widgets", "--token", secret_token],
+        ["apply", "--config", "tests/fixtures/policy_valid.yml", "--repo", "acme/widgets", "--token", secret_token],
+    ):
+        result = runner.invoke(main, args)
+        assert result.exit_code == 3, result.output
+        assert secret_token not in result.output
+        assert "Bad credentials" in result.output  # the real GitHub error text still surfaces
