@@ -65,12 +65,18 @@ restrict itself to a subset. This is why token scoping (above) is the primary co
   identity and is what `.github/workflows/release.yml`'s `release` job uses to push its version-bump
   branch, open and squash-merge the release pull request, push the signed release tag, and create
   the GitHub release — see "Release Signing" below for the full design. Fine-grained, scoped to this
-  single repository, `Contents: Read and write` + `Pull requests: Read and write` only (no
-  `Administration` — the bot merges through the normal PR path, same as any other collaborator, and
-  never touches branch protection itself). Stored as a secret on the protected `release` GitHub
-  Environment, not as a repository secret, so it's only materialized on the runner after a human
-  approves that environment's required-reviewer gate. Does not exist yet; see the setup checklist
-  below.
+  single repository, `Contents: Read and write` + `Pull requests: Read and write` only — no
+  `Administration` (the bot merges through the normal PR path, same as any other collaborator, and
+  never touches branch protection itself), and deliberately no `Checks`/`Actions` read permission
+  either: fine-grained PATs currently cannot call the Checks API at all (confirmed against GitHub's
+  own fine-grained-PAT permissions reference — there is no selectable "Checks" repository
+  permission), so `release.yml` never asks this token to independently read check-run status. It
+  instead retries a plain `gh pr merge` on an interval, relying on GitHub's own server-side
+  mergeability evaluation (which checks `CI / required` using the repository's branch-protection
+  state, not the caller's token scope) — see `docs/ci-cd.md` for the design reasoning. Stored as a
+  secret on the protected `release` GitHub Environment, not as a repository secret, so it's only
+  materialized on the runner after a human approves that environment's required-reviewer gate. Does
+  not exist yet; see the setup checklist below.
 - `RELEASE_BOT_SIGNING_KEY` (Task 10) — the release-bot's SSH private signing key, also stored as a
   `release`-environment secret (same approval gate as `RELEASE_BOT_TOKEN` above), used by
   `release.yml` to produce a signed commit and a signed, annotated release tag. The corresponding
@@ -364,9 +370,10 @@ a code change can do on its own (same pattern as `POLICY_AUDIT_TOKEN` above).
      kind of unnecessary standing privilege (see this file's Threat Model).
 2. **`RELEASE_BOT_TOKEN`** — a fine-grained personal access token issued from the bot's own account
    (not the human owner's), scoped to `shipsolid/repo-policy` only, with repository permissions
-   `Contents: Read and write` and `Pull requests: Read and write` (no `Administration`, no other
-   repository access). Store it as a **secret on the `release` GitHub Environment** (step 4 below),
-   not a repository or organization secret.
+   `Contents: Read and write` and `Pull requests: Read and write` only (no `Administration`, no
+   `Checks`/`Actions` read either — see "Secrets Management" above for why those aren't needed, and
+   aren't even selectable for a fine-grained PAT today). Store it as a **secret on the `release`
+   GitHub Environment** (step 4 below), not a repository or organization secret.
 3. **`RELEASE_BOT_SIGNING_KEY`** — the bot's SSH *private* signing key (the one whose public half
    was added to the bot's account in step 1), generated locally by whoever administers this — never
    pasted into a workflow run, an issue, or a chat transcript. Store it as a **secret on the

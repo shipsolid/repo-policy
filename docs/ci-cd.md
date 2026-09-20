@@ -150,16 +150,24 @@ squash-merge would fire `release.yml` again on itself — harmless in the end (P
 new to release and no-op) but wasteful, and it would demand a second, redundant owner-approval click
 on the `release` environment for no real release.
 
-**The required-check wait is scoped to what's actually required:** `gh pr checks --required --watch`
-waits only for `CI / required` — the one check `repository-policy.yml` actually lists under
-`status_checks.required` — not every check the PR triggers. `security.yml`'s pip-audit/CodeQL/zizmor
+**Waiting for the merge to become possible, without reading check status directly:** the natural
+design — poll `gh pr checks --required --watch` until `CI / required` reports success, then merge —
+runs into a real platform gap: fine-grained PATs (what `RELEASE_BOT_TOKEN` is) currently cannot call
+the Checks API at all (confirmed against GitHub's own fine-grained-PAT permissions reference — there
+is no selectable "Checks" repository permission for this token type; the closest options, "Actions"
+and the legacy "Commit statuses," don't reliably cover the check-run rollup a merge decision actually
+depends on, per multiple GitHub community reports). Rather than depend on scope this token
+structurally can't be granted, `release.yml` retries a **plain `gh pr merge`** on a 15-second
+interval instead: GitHub evaluates mergeability — including whether `CI / required` has actually
+passed — server-side, from the repository's own branch-protection state, independent of whatever the
+calling token can itself read. A "not mergeable yet" failure is the expected, retriable state while
+CI is still running on the PR; the loop is bounded (`deadline`/30 minutes) so a genuinely broken
+`CI / required` (or any other permanent merge blocker) fails the release job loudly instead of
+blocking the `release-main` concurrency queue indefinitely, at the cost of a slower failure than a
+check-status-aware wait would give for that specific case. `security.yml`'s pip-audit/CodeQL/zizmor
 jobs also run on this PR (nothing special-cases a release-bot PR out of them) but are advisory, not
-PR-blocking (see "Security workflow" below), so waiting on them here would add latency for no gate
-that exists. The wait is bounded (`timeout 1800`) so a genuinely broken `CI / required` fails the
-release job loudly rather than blocking the `release-main` concurrency queue indefinitely; even if
-that client-side wait had a race (e.g. polling before GitHub has registered the PR's check suite),
-the subsequent `gh pr merge` call is independently rejected server-side by GitHub if the required
-check hasn't actually reported success — the wait loop is a convenience, not the enforcement.
+PR-blocking (see "Security workflow" below), so their runtime doesn't factor into how long the retry
+loop needs to wait.
 
 **The owner-approval gate:** the `release` job now declares `environment: release`. Once that
 environment exists with a required-reviewer protection rule (see `SECURITY.md`'s setup checklist),

@@ -183,12 +183,19 @@ jobs:
             --title "chore(release): ${RELEASE_TAG}" \
             --body "Automated version bump for ${RELEASE_TAG}, opened and merged by the release bot. See docs/ci-cd.md for how this pipeline works."
 
-      # --required filters to exactly the branch-protection-required check (`CI / required`),
-      # deliberately not every check this PR triggers -- security.yml's pip-audit/CodeQL/zizmor
-      # jobs are advisory, not PR-blocking (see docs/ci-cd.md), and waiting on them here would just
-      # slow down every release for no gate that actually exists. `timeout` bounds the wait so a
-      # genuinely broken/hung CI run fails this job loudly instead of blocking the release-main
-      # concurrency queue forever.
+      # Retries plain `gh pr merge` on an interval rather than first polling check status
+      # (e.g. `gh pr checks --required --watch`): GitHub's fine-grained PATs currently cannot call
+      # the Checks API at all (confirmed against GitHub's own fine-grained-PAT permissions
+      # reference -- there is no selectable "Checks" repository permission, only the unrelated
+      # "Actions" and legacy "Commit statuses" ones, and community reports say even those don't
+      # reliably cover the check-run rollup a merged PR's required-check state depends on). Relying
+      # on RELEASE_BOT_TOKEN to independently read check-run status would mean depending on scope
+      # this token structurally can't be granted. `gh pr merge` doesn't have this problem: mergeability
+      # -- including whether `CI / required` has actually passed -- is evaluated server-side by
+      # GitHub itself as part of the merge attempt, using the repository's own branch-protection
+      # state, not the caller's read access to check details. So: just retry the merge itself until
+      # it succeeds or the timeout elapses; a "not mergeable yet" failure is the expected, retriable
+      # state while CI is still running on the PR.
       #
       # Squash, not rebase or merge commit: linear_history: true rules out a merge commit, and only
       # squash lets --subject override the final commit message on `main` -- required so `[skip ci]`
@@ -205,13 +212,17 @@ jobs:
         run: |
           set -euo pipefail
           branch="release-bot/${RELEASE_TAG}"
-          # Brief pause before the first poll: gives GitHub a moment to register the PR's check
-          # suite so --required has something to watch, rather than racing a just-opened PR.
-          sleep 15
-          timeout 1800 gh pr checks "$branch" --watch --interval 15 --fail-fast --required
-          gh pr merge "$branch" --squash --delete-branch \
-            --subject "chore(release): ${RELEASE_TAG} [skip ci]" \
-            --body ""
+          deadline=$((SECONDS + 1800))
+          until gh pr merge "$branch" --squash --delete-branch \
+              --subject "chore(release): ${RELEASE_TAG} [skip ci]" \
+              --body ""; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Timed out waiting for the release PR to become mergeable (CI / required never passed, or another merge blocker didn't clear)"
+              exit 1
+            fi
+            echo "PR not mergeable yet (CI / required is likely still running) -- retrying in 15s"
+            sleep 15
+          done
 
       # Re-scoped from the pre-merge check above: this is the check that actually gates whether
       # this release proceeds to a signed tag and PyPI. GitHub's squash-merge always creates a new
