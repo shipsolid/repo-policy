@@ -59,7 +59,7 @@ def test_to_api_payload_builds_full_replace_body():
     assert payload["enforce_admins"] is False
     assert payload["restrictions"] is None
     assert payload["required_pull_request_reviews"]["required_approving_review_count"] == 2
-    assert payload["required_status_checks"]["contexts"] == ["build"]
+    assert "contexts" not in payload["required_status_checks"]
     assert payload["required_linear_history"] is True
     assert payload["allow_force_pushes"] is False
     assert payload["allow_deletions"] is False

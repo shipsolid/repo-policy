@@ -9,7 +9,7 @@ def test_to_branch_protection_none_when_empty():
 
 def test_to_branch_protection_builds_payload():
     payload = status_checks.to_branch_protection(StatusChecksPolicy(required=["build", "test"]))
-    assert payload["contexts"] == ["build", "test"]
+    assert "contexts" not in payload
     assert payload["checks"] == [
         {"context": "build", "app_id": None},
         {"context": "test", "app_id": None},

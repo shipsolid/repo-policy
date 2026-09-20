@@ -16,7 +16,6 @@ def to_branch_protection(policy: StatusChecksPolicy | None, current: dict | None
     current_app_ids = {check["context"]: check.get("app_id") for check in current.get("checks", [])}
     return {
         "strict": current.get("strict", False),
-        "contexts": list(policy.required),
         "checks": [
             {"context": name, "app_id": current_app_ids.get(name)} for name in policy.required
         ],
