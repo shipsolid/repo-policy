@@ -1,5 +1,6 @@
 import pytest
 
+from repo_policy.diff import PolicyResolutionError
 from repo_policy.models import BranchPolicy, PullRequestPolicy, StatusChecksPolicy
 from repo_policy.policies import rulesets
 
@@ -104,6 +105,27 @@ def test_from_api_reads_rules_array():
     assert result.linear_history is False
     assert result.allow_force_push is False
     assert result.allow_deletion is True
+
+
+def test_from_api_wraps_validation_error_as_policy_resolution_error():
+    """PullRequestPolicy.approvals is now constrained to GitHub's actual 0..6 range (models.py) --
+    if a live ruleset's pull_request rule ever has required_approving_review_count outside that
+    range (a direct API write, a future GitHub product change, or a value repo-policy itself wrote
+    before this constraint existed), from_api's direct BranchPolicy(...) construction would
+    otherwise raise a raw pydantic ValidationError that nothing above cli.py catches, crashing
+    with Python's default exit code 1 (colliding with EXIT_DRIFT) instead of a clean,
+    already-handled PolicyResolutionError -- the same failure mode branch_protection.from_api's
+    own test_from_api_wraps_validation_error_as_policy_resolution_error guards against."""
+    data = {
+        "rules": [
+            {
+                "type": "pull_request",
+                "parameters": {"required_approving_review_count": 7, "require_code_owner_review": False},
+            }
+        ]
+    }
+    with pytest.raises(PolicyResolutionError):
+        rulesets.from_api(data)
 
 
 def test_to_api_payload_builds_ruleset_targeting_branch():

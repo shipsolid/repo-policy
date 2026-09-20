@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from repo_policy.diff import Change
+from pydantic import ValidationError
+
+from repo_policy.diff import Change, PolicyResolutionError
 from repo_policy.models import _RULESET_UNSUPPORTED_FIELDS, BranchPolicy, permissive_branch_policy
 from repo_policy.policies import pull_requests, status_checks
 
@@ -33,16 +35,29 @@ def from_api(data: dict | None) -> BranchPolicy:
     if data is None:
         return permissive_branch_policy("ruleset")
     rules_by_type = {rule["type"]: rule for rule in data.get("rules", [])}
-    return BranchPolicy(
-        enforcement="ruleset",
-        pull_requests=pull_requests.from_ruleset_rule(rules_by_type.get("pull_request")),
-        status_checks=status_checks.from_ruleset_rule(rules_by_type.get("required_status_checks")),
-        signed_commits="required_signatures" in rules_by_type,
-        linear_history="required_linear_history" in rules_by_type,
-        allow_force_push="non_fast_forward" not in rules_by_type,
-        allow_deletion="deletion" not in rules_by_type,
-        **_RULESET_UNSUPPORTED_FIELDS,
-    )
+    try:
+        return BranchPolicy(
+            enforcement="ruleset",
+            pull_requests=pull_requests.from_ruleset_rule(rules_by_type.get("pull_request")),
+            status_checks=status_checks.from_ruleset_rule(rules_by_type.get("required_status_checks")),
+            signed_commits="required_signatures" in rules_by_type,
+            linear_history="required_linear_history" in rules_by_type,
+            allow_force_push="non_fast_forward" not in rules_by_type,
+            allow_deletion="deletion" not in rules_by_type,
+            **_RULESET_UNSUPPORTED_FIELDS,
+        )
+    except ValidationError as exc:
+        # e.g. a live ruleset's pull_request rule with required_approving_review_count outside
+        # PullRequestPolicy.approvals' 0..6 range (models.py) -- a direct API write, a future
+        # GitHub product change, or a value repo-policy itself wrote before that constraint
+        # existed. Nothing above cli.py catches a raw ValidationError; wrapping it as
+        # PolicyResolutionError (already handled by cli.py) avoids crashing with Python's default
+        # exit code 1, which would collide with EXIT_DRIFT -- the same reasoning as
+        # branch_protection.from_api's identical try/except.
+        raise PolicyResolutionError(
+            f"GitHub's current ruleset state for this branch is internally inconsistent and "
+            f"could not be parsed: {exc}"
+        ) from exc
 
 
 def metadata_changes(branch: str, data: dict | None) -> list[Change]:
