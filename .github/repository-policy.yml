@@ -45,10 +45,14 @@ branches:
     allow_force_push: false
     allow_deletion: false
 
-    # Admins (today: the sole maintainer) are not exempt from the rules above -- no silent
-    # self-bypass on a security-governance tool's own repo. See "Emergency recovery" in SECURITY.md
-    # for the documented, auditable way to temporarily lift this when it blocks a legitimate fix.
-    enforce_admins: true
+    # Admins (today: the sole maintainer) ARE exempt from the rules above -- deliberate, not an
+    # oversight. With exactly one maintainer, enforce_admins: true means losing the ability to
+    # push directly to main at all (no second person exists to approve a PR), turning every fix,
+    # including trivial ones, into a mandatory detour through the "Emergency recovery" procedure
+    # in SECURITY.md. PR requirements, the required status check, and conversation resolution
+    # still apply to everyone else. Revisit and flip to true once a second active maintainer
+    # joins -- see SECURITY.md's threat model on why that matters.
+    enforce_admins: false
     required_conversation_resolution: true
     lock_branch: false
     # false pairs with lock_branch: false above -- BranchPolicy rejects allow_fork_syncing: true
