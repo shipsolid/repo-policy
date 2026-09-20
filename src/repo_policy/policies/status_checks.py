@@ -76,4 +76,10 @@ def from_ruleset_rule(rule: dict | None) -> StatusChecksPolicy | None:
     checks = rule["parameters"].get("required_status_checks", [])
     if not checks:
         return None
-    return StatusChecksPolicy(required=[check["context"] for check in checks])
+    # dict.fromkeys dedupes while preserving first-occurrence order -- the ruleset-schema
+    # counterpart of from_branch_protection's identical dedup above: this array can likewise
+    # contain two entries sharing a context but different integration_id (e.g. mid-migration
+    # between CI apps), and StatusChecksPolicy.required now rejects duplicate entries outright
+    # (models.py), so reading back a GitHub ruleset actually in that transient state would
+    # otherwise raise instead of just reporting the (deduped) current state.
+    return StatusChecksPolicy(required=list(dict.fromkeys(check["context"] for check in checks)))

@@ -6,32 +6,61 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-class PullRequestPolicy(BaseModel):
-    """Frozen: these are point-in-time policy snapshots (declared, current, or resolved), never
-    mutated in place anywhere in this codebase -- frozen makes that a guarantee instead of a
-    convention, and (since every field here is a scalar) makes instances hashable, which Change
-    (diff.py) needs since it's itself a frozen dataclass whose auto-derived __hash__ requires
-    every field value to be hashable."""
+class _PolicyModel(BaseModel):
+    """Base for every policy-schema model (declared policy.yml content and the internal
+    snapshots derived from it -- not the raw dicts this codebase reads from the GitHub API,
+    which stay plain dicts until translated). This is governance policy: a wrong guess about
+    what an operator meant becomes wrong branch protection, so every model built on this fails
+    closed instead of being permissive --
 
-    model_config = ConfigDict(frozen=True)
+    - `extra="forbid"`: an unknown/misspelled field (`strcit`, `secret_scaning`) is rejected
+      instead of silently ignored, so a typo doesn't quietly disable the rule the operator thought
+      they were declaring.
+    - `strict=True`: no implicit scalar coercion (`"no"` -> `False`, a numeric string -> `int`,
+      `1` -> `True`) -- every translator that builds these models from parsed GitHub API JSON
+      must therefore pass real `bool`/`int` values, which they already do (JSON parsing itself
+      never produces stringy booleans/ints).
+    - `frozen=True`: the same "never mutated in place" guarantee every model here already
+      documented individually before this base class existed.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+
+class PullRequestPolicy(_PolicyModel):
+    """Point-in-time policy snapshot (declared, current, or resolved), never mutated in place
+    anywhere in this codebase -- see _PolicyModel. Frozen (since every field here is a scalar)
+    also makes instances hashable, which Change (diff.py) needs since it's itself a frozen
+    dataclass whose auto-derived __hash__ requires every field value to be hashable."""
 
     required: bool = True
-    approvals: int = 1
+    approvals: int = Field(default=1, ge=0, le=6)
     code_owner_review: bool = False
     dismiss_stale_reviews: bool = False
     require_last_push_approval: bool = False
 
 
-class StatusChecksPolicy(BaseModel):
+class StatusChecksPolicy(_PolicyModel):
     """Frozen for the same immutability guarantee as PullRequestPolicy -- but `required` is a
     list, which stays unhashable regardless (pydantic's frozen-model __hash__ hashes each field
     value, and a list is never hashable), so instances of this model still can't be hashed. Only
     PullRequestPolicy's hashability was actually needed to fix Change's; this is immutability for
     its own sake, not a claim of full hashability."""
 
-    model_config = ConfigDict(frozen=True)
-
     required: list[str] = Field(default_factory=list)
+
+    @field_validator("required")
+    @classmethod
+    def _reject_blank_and_duplicate_checks(cls, value: list[str]) -> list[str]:
+        if any(not name.strip() for name in value):
+            raise ValueError("status check names must not be blank or whitespace-only")
+        counts: dict[str, int] = {}
+        for name in value:
+            counts[name] = counts.get(name, 0) + 1
+        duplicates = {name for name, count in counts.items() if count > 1}
+        if duplicates:
+            raise ValueError(f"duplicate status check name(s): {', '.join(sorted(duplicates))}")
+        return value
 
 
 PERMISSIVE_PULL_REQUESTS = PullRequestPolicy(required=False, approvals=0, code_owner_review=False)
@@ -85,12 +114,10 @@ _RULESET_UNSUPPORTED_FIELDS: dict[str, bool] = {
 }
 
 
-class BranchPolicy(BaseModel):
+class BranchPolicy(_PolicyModel):
     """Frozen for the same reason as PullRequestPolicy/StatusChecksPolicy: a point-in-time policy
     snapshot (declared, current, or resolved) that's never mutated in place anywhere in this
     codebase -- frozen makes that a guarantee instead of an unenforced convention."""
-
-    model_config = ConfigDict(frozen=True)
 
     enforcement: Literal["branch_protection", "ruleset"] = "branch_protection"
     strict: bool | None = None
@@ -156,10 +183,8 @@ def permissive_branch_policy(
     return BranchPolicy.model_validate(fields)
 
 
-class RepoSettingsPolicy(BaseModel):
+class RepoSettingsPolicy(_PolicyModel):
     """Frozen for the same "never mutated in place" reason as BranchPolicy."""
-
-    model_config = ConfigDict(frozen=True)
 
     delete_branch_on_merge: bool | None = None
     allow_update_branch: bool | None = None
@@ -190,12 +215,10 @@ class RepoSettingsPolicy(BaseModel):
         return self
 
 
-class PolicyConfig(BaseModel):
+class PolicyConfig(_PolicyModel):
     """Frozen for the same "never mutated in place" reason as BranchPolicy -- unhashable
     regardless (its `branches` dict field is never hashable), the same documented limitation as
     StatusChecksPolicy."""
-
-    model_config = ConfigDict(frozen=True)
 
     version: int
     strict: bool = False
