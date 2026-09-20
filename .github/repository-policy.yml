@@ -52,10 +52,21 @@ branches:
       require_last_push_approval: false
 
     status_checks:
-      # Task 6's stable name: the `required` job in ci.yml (workflow `CI`), which itself `needs:`
-      # every real gating job -- pointing here instead of at individual job names means adding or
-      # removing a CI job never requires a matching branch-policy edit.
-      required: ["CI / required"]
+      # Task 6's stable name: the `required` job in ci.yml, which itself `needs:` every real
+      # gating job -- pointing here instead of at individual job names means adding or removing a
+      # CI job never requires a matching branch-policy edit.
+      #
+      # Live-verified against PR #1's own first real CI run (2026-09-21): a directly
+      # `pull_request`-triggered job's check-run name is exactly its own `name:` field --
+      # "required" -- with NO automatic "<workflow name> / " prefix. That prefixed form
+      # ("CI / required") is what earlier tasks assumed based on the "workflow / job" grouping
+      # GitHub's UI displays for readability, and is genuinely what a *nested* `workflow_call`
+      # invocation produces (e.g. release.yml calling ci.yml surfaces as "Release / ci / ..."),
+      # but it does not apply to a direct trigger. The wrong value here silently produced
+      # `mergeStateStatus: BLOCKED` on a fully-green PR -- GitHub was waiting forever for a
+      # status string CI would never actually report. Confirmed only one job repo-wide is named
+      # `required` (ci.yml), so no cross-workflow collision risk from the unprefixed name.
+      required: ["required"]
 
     linear_history: true
     allow_force_push: false
