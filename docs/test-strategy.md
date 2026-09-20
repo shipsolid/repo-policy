@@ -4,11 +4,14 @@
 
 215 unit-level tests (mocked via `respx`), organized one file per source module
 (`tests/test_<module>.py`) plus `tests/test_idempotency.py` (one integration-shaped test) and
-`tests/test_policies_parity.py` (a cross-backend regression guard) — plus 6 end-to-end tests in
-`tests/e2e/` that exercise the real GitHub API against a live, persistent fixture repo
-(`shipsolid/repo-policy-e2e-fixture`). The E2E suite is excluded from the default `pytest` run
-(pytest marker `e2e`); run it explicitly with `pytest -m e2e` (requires
-`REPO_POLICY_E2E_TOKEN`), or via the nightly/manual `.github/workflows/e2e.yml`.
+`tests/test_policies_parity.py` (a cross-backend regression guard) — plus 3 end-to-end test
+functions in `tests/e2e/` that exercise the real GitHub API against a live, persistent fixture
+repo (`shipsolid/repo-policy-e2e-fixture`): two independent smoke tests (config validation, token/
+repo reachability) and one collapsed lifecycle scenario covering everything else (see "E2E Test
+Isolation and Concurrency Safety" below for why it's one test, not several). The E2E suite is
+excluded from the default `pytest` run (pytest marker `e2e`); run it explicitly with
+`pytest -m e2e` (requires `REPO_POLICY_E2E_TOKEN`), or via the nightly/manual
+`.github/workflows/e2e.yml`.
 
 ## Approach: TDD throughout
 
@@ -92,6 +95,53 @@ Against a disposable repository:
 6. Remove a declared branch from the config with `strict: true`, `apply`, confirm the orphaned
    ruleset (and only that one) is deleted.
 7. Restore the repository to its original state.
+
+The automated suite now also covers a scenario beyond these 7 steps: after `apply`, directly
+disable the managed ruleset through the raw GitHub API (bypassing repo-policy), confirm `audit`/
+`plan` report it as drift, repair it with another `apply`, and independently re-confirm the
+branch's live effective rules — see "Ineffective-ruleset repair" below.
+
+## E2E Test Isolation and Concurrency Safety
+
+`tests/e2e/` mutates one shared, persistent, real repository (`shipsolid/repo-policy-e2e-fixture`)
+across every local run and every CI run. Two hazards follow directly from that: test-order
+dependence within a single run, and two runs (a manual `workflow_dispatch` and the nightly
+schedule, or two manual dispatches) racing each other's mutations against the same repo. Both are
+addressed structurally, not by convention:
+
+- **One collapsed lifecycle test, not several dependent ones.** Earlier revisions of this suite
+  split "plan shows drift", "apply succeeds", "plan shows zero drift", and "strict apply prunes"
+  into separate test functions that only produced a coherent story because pytest happened to run
+  them in file order against the same session-scoped `clean_fixture_repo` fixture — one docstring
+  literally said "Must run after test_plan_reports_full_drift...". `test_full_policy_lifecycle` in
+  `tests/e2e/test_fixture_repo.py` replaces all of them with one function whose only ordering is
+  its own statement order: clean baseline → `plan` (full drift) → `apply` → independent API
+  verification → no-drift `audit`/`plan` → **ineffective-ruleset repair** (disable the managed
+  ruleset directly via the raw API, confirm `audit`/`plan` surface it as drift, repair with
+  another `apply`, re-confirm the branch's live effective rules) → strict prune (switch to a
+  policy that drops the ruleset-enforced branch, confirm the orphan is deleted) → final cleanup.
+  There is no longer a subset or reordering of this suite that can produce a different outcome.
+- **Independent smoke tests stay independent.** `test_validate_accepts_e2e_fixture_policies` (pure
+  config parsing, no API calls) and `test_live_token_and_repo_are_reachable` (token/repo
+  reachability only) never take `clean_fixture_repo` and never assert anything about live policy
+  state, so they remain correct regardless of what state the fixture repo happens to be in.
+- **Cleanup is guaranteed even when setup itself fails partway.** `clean_fixture_repo`
+  (`tests/e2e/conftest.py`) registers its teardown via `request.addfinalizer` *before* performing
+  its first mutation, rather than relying on the tail half of a `yield`-based generator fixture.
+  pytest only turns a generator fixture's post-`yield` code into a registered finalizer once the
+  code *before* `yield` has already returned successfully — so if a setup step after the first
+  mutation had raised (e.g. the ruleset-branch existence check), the old design would never have
+  reached `yield` and would silently skip scheduling any cleanup at all. `request.addfinalizer`
+  has no such gap: once registered, it always runs at session teardown, regardless of what happens
+  afterward in this fixture's own remaining setup or in any test built on top of it.
+- **Concurrent workflow dispatch cannot overlap.** `.github/workflows/e2e.yml` declares
+  `concurrency: {group: repo-policy-e2e-fixture, cancel-in-progress: false}`. A fixed group name
+  (not templated on a ref or run id) means every trigger of this workflow — scheduled or manual —
+  shares one queue; `cancel-in-progress: false` queues a second run behind the first instead of
+  cancelling it, since a cancelled mid-mutation run would abandon the fixture repo in whatever
+  partial state the cancellation caught it in, defeating the cleanup guarantee above. The net
+  effect: GitHub Actions structurally never lets two runs of this workflow touch the fixture repo
+  at the same time, regardless of how they were triggered.
 
 ## Known Gaps
 

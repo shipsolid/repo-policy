@@ -74,13 +74,26 @@ def _ensure_ruleset_branch_exists(raw_http: httpx.Client) -> None:
 
 
 @pytest.fixture(scope="session")
-def clean_fixture_repo(live_client: GitHubClient, raw_http: httpx.Client) -> Iterator[None]:
+def clean_fixture_repo(
+    request: pytest.FixtureRequest, live_client: GitHubClient, raw_http: httpx.Client
+) -> None:
     """Resets shipsolid/repo-policy-e2e-fixture to a known baseline once per test session: no
     branch protection, no rulesets, and a second branch (repo-policy-verify) for
     ruleset-enforcement coverage. This is a persistent, shared, real repo reused across every
     local and CI run -- not created fresh per run -- so tests cannot assume a blank slate without
-    this fixture. See docs/test-strategy.md's E2E section."""
+    this fixture. See docs/test-strategy.md's E2E section.
+
+    Task 11 Step 3: the final cleanup is registered via `request.addfinalizer` *before* the first
+    mutation below, rather than as the tail half of a `yield`-based generator fixture. That
+    distinction matters: pytest only registers a generator fixture's post-yield code as a
+    finalizer *after* the code before `yield` returns successfully -- if `_ensure_ruleset_branch_
+    exists`'s assertion (a read, but still a failure point) had raised, the old yield-based version
+    would never have reached `yield`, so its post-yield cleanup would never have been scheduled at
+    all, silently leaving a stripped-but-not-fully-verified repo with no guaranteed reset at session
+    end. `request.addfinalizer` has no such ordering hazard -- once called, the finalizer is queued
+    unconditionally and runs at session teardown regardless of what happens afterward in this
+    fixture's own setup or in any test that depends on it (an assertion failure, an API error, or
+    the ineffective-ruleset repair scenario's own direct-API perturbation of live state)."""
+    request.addfinalizer(lambda: _strip_protection_and_rulesets(live_client, raw_http))
     _strip_protection_and_rulesets(live_client, raw_http)
     _ensure_ruleset_branch_exists(raw_http)
-    yield
-    _strip_protection_and_rulesets(live_client, raw_http)

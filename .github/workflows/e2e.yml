@@ -5,6 +5,19 @@ on:
   schedule:
     - cron: "0 3 * * *"
 
+# Task 11 Step 4: this suite mutates a single shared, persistent fixture repo
+# (shipsolid/repo-policy-e2e-fixture) -- a manual workflow_dispatch and the nightly schedule firing
+# close together (or two manual dispatches) must never run against it at the same time, or one
+# run's clean_fixture_repo teardown/setup can race the other run's in-flight mutations. `group` is
+# a fixed name (not templated on a ref/run id) so every trigger of this workflow shares the same
+# queue regardless of how it was started; `cancel-in-progress: false` queues the second run behind
+# the first rather than cancelling it -- a cancelled mid-mutation run would abandon the fixture in
+# whatever partial state its cancellation caught it in, which is exactly what this suite's
+# cleanup guarantees (see tests/e2e/conftest.py) are designed to prevent.
+concurrency:
+  group: repo-policy-e2e-fixture
+  cancel-in-progress: false
+
 jobs:
   e2e:
     runs-on: ubuntu-latest

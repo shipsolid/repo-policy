@@ -9,6 +9,13 @@ branches:
       code_owner_review: false
       dismiss_stale_reviews: true
       require_last_push_approval: true
+    # Task 11 Step 5: exercised on both branches below so the collapsed lifecycle test can
+    # independently verify both backend translators (branch_protection vs. ruleset) actually send
+    # a real API payload for these, not just that repo-policy's own diff considers them satisfied.
+    status_checks:
+      required:
+        - "repo-policy-e2e/verify"
+    signed_commits: true
     linear_history: true
     allow_force_push: false
     allow_deletion: false
@@ -26,6 +33,10 @@ branches:
       code_owner_review: false
       dismiss_stale_reviews: true
       require_last_push_approval: true
+    status_checks:
+      required:
+        - "repo-policy-e2e/verify"
+    signed_commits: true
     linear_history: true
     allow_force_push: false
     allow_deletion: false
