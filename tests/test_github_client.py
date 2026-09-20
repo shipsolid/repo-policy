@@ -402,6 +402,45 @@ def test_update_ruleset_puts_payload(client):
 
 
 @respx.mock
+def test_get_rules_for_branch_returns_empty_list_when_nothing_applies(client):
+    respx.get("https://api.github.com/repos/acme/widgets/rules/branches/main").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    assert client.get_rules_for_branch("main") == []
+
+
+@respx.mock
+def test_get_rules_for_branch_returns_repository_and_organization_rules(client):
+    payload = [
+        {
+            "type": "pull_request",
+            "ruleset_source_type": "Repository",
+            "ruleset_source": "acme/widgets",
+            "ruleset_id": 7,
+        },
+        {
+            "type": "deletion",
+            "ruleset_source_type": "Organization",
+            "ruleset_source": "acme",
+            "ruleset_id": 42,
+        },
+    ]
+    respx.get("https://api.github.com/repos/acme/widgets/rules/branches/main").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    assert client.get_rules_for_branch("main") == payload
+
+
+@respx.mock
+def test_get_rules_for_branch_raises_clean_error_on_non_json_response(client):
+    respx.get("https://api.github.com/repos/acme/widgets/rules/branches/main").mock(
+        return_value=httpx.Response(200, content=b"<html>not json</html>")
+    )
+    with pytest.raises(GitHubAPIError):
+        client.get_rules_for_branch("main")
+
+
+@respx.mock
 def test_delete_ruleset_calls_delete(client):
     route = respx.delete("https://api.github.com/repos/acme/widgets/rulesets/5").mock(
         return_value=httpx.Response(204)

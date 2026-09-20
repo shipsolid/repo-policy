@@ -43,15 +43,61 @@ def fetch_current(
     return rulesets.from_api(raw), raw, ruleset_id
 
 
+def _branch_changes(
+    client: GitHubClient,
+    branch: str,
+    desired: BranchPolicy,
+    resolved: BranchPolicy,
+    current: BranchPolicy,
+    raw: dict | None,
+    ruleset_id: int | None,
+) -> list[Change]:
+    """Field-level drift, plus -- for enforcement: ruleset branches -- the ruleset's own
+    canonical-ownership metadata (rulesets.metadata_changes) and, only once neither of those
+    reports anything, a live cross-check against GitHub's own effective-rules endpoint
+    (GitHubClient.get_rules_for_branch). That ordering matters: it's the mechanism that closes the
+    false-compliance gap (a ruleset can look right in both its rule content and its own metadata
+    and still not be what GitHub is actually enforcing on this branch) without spending an extra
+    API call whenever there's already other drift to report. The effective-rules check is also
+    skipped whenever the ruleset has nothing configured to enforce (an intentionally permissive,
+    empty ruleset) -- it can never show up as an active rule regardless of how correctly it's
+    scoped, so checking would always misreport it as ineffective."""
+    changes = diff(resolved, current)
+    if desired.enforcement != "ruleset":
+        return changes
+    changes = changes + rulesets.metadata_changes(branch, raw)
+    if changes or ruleset_id is None:
+        return changes
+    payload = rulesets.to_api_payload(branch, resolved, current_raw=raw)
+    if not payload["rules"]:
+        return changes
+    return changes + _ruleset_effectiveness_changes(client, branch, ruleset_id)
+
+
+def _ruleset_effectiveness_changes(client: GitHubClient, branch: str, ruleset_id: int) -> list[Change]:
+    active_ruleset_ids = {rule.get("ruleset_id") for rule in client.get_rules_for_branch(branch)}
+    if ruleset_id in active_ruleset_ids:
+        return []
+    return [
+        Change(
+            field="ruleset_effectiveness",
+            current_value="not contributing an active rule on this branch",
+            desired_value="active",
+            action="modify",
+        )
+    ]
+
+
 def plan_branch(
     client: GitHubClient, config: PolicyConfig, branch: str, *, rulesets_cache: list[dict] | None = None
 ) -> tuple[list[Change], BranchPolicy]:
     desired = config.branches[branch]
-    current, _raw, _ruleset_id = fetch_current(
+    current, raw, ruleset_id = fetch_current(
         client, branch, desired.enforcement, rulesets_cache=rulesets_cache
     )
     resolved = resolve_desired(desired, current, strict=effective_strict(config, branch))
-    return diff(resolved, current), resolved
+    changes = _branch_changes(client, branch, desired, resolved, current, raw, ruleset_id)
+    return changes, resolved
 
 
 def apply_branch(
@@ -62,7 +108,7 @@ def apply_branch(
         client, branch, desired.enforcement, rulesets_cache=rulesets_cache
     )
     resolved = resolve_desired(desired, current, strict=effective_strict(config, branch))
-    changes = diff(resolved, current)
+    changes = _branch_changes(client, branch, desired, resolved, current, raw, ruleset_id)
     stale = (
         desired.enforcement == "ruleset" and client.get_branch_protection(branch) is not None
     )
