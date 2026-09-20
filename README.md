@@ -73,6 +73,24 @@ above is just an example name — and reference that secret instead.
 The floating tag tracks the current major version (`v0` until a `1.0.0` release ships), the same
 convention `actions/checkout` and similar Actions use.
 
+## Self-governance
+
+This repository governs itself with its own tool: [`.github/repository-policy.yml`](.github/repository-policy.yml)
+declares `main`'s branch protection and repo security settings, and
+[`.github/workflows/policy-audit.yml`](.github/workflows/policy-audit.yml) runs `repo-policy audit`
+against it on a daily schedule, on every change to the policy file or that workflow, and on demand.
+
+- The audit workflow is read-only (`mode: audit`) and needs a `POLICY_AUDIT_TOKEN` repository
+  secret — a fine-grained PAT scoped to this repository only, with `Administration: Read`. That
+  secret does not exist yet; creating it is a live-repo setup step for whoever holds admin access.
+- `.github/repository-policy.yml` documents the *intended* branch protection for this repository —
+  it has not yet been applied. Until `repo-policy apply` runs against the live repository (a manual,
+  reviewed step — see [SECURITY.md](SECURITY.md)'s Threat Model for why `apply` is never run
+  unattended against a real repo from an untrusted trigger), it does not reflect live GitHub state.
+- If a change to `main`'s required status check ever leaves it unable to produce a passing
+  `CI / required` result — blocking the very fix that would repair it — see SECURITY.md's
+  "Emergency Recovery" for the documented, auditable bypass procedure.
+
 ## How it works
 
 Every declared branch is diffed against live GitHub state and reconciled through one of two

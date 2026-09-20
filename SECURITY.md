@@ -54,6 +54,12 @@ restrict itself to a subset. This is why token scoping (above) is the primary co
   blast radius is bounded to that one repo — a concrete instance of the "scope the PAT as
   narrowly as GitHub allows" mitigation already listed in the Threat Model below, not a new
   category of risk.
+- A third PAT, `POLICY_AUDIT_TOKEN`, is expected by `.github/workflows/policy-audit.yml`: this
+  repository's own self-audit (see README's "Self-governance"). Narrower still — fine-grained,
+  `Administration: Read` only (not `Read and write`), restricted to this single repository
+  (`shipsolid/repo-policy`) — because that workflow only ever runs `audit`, never `apply`, so it
+  has no legitimate need for write access at all. This secret does not exist yet; creating it is a
+  live-repo setup step for whoever holds admin access on `shipsolid/repo-policy`.
 
 ## Vulnerability Management
 
@@ -196,6 +202,35 @@ itself already manages other `security_and_analysis` sub-settings through — se
 `github_client.py`'s `update_security_and_analysis`). Turning these two on for
 `shipsolid/repo-policy` itself is an action item for whoever holds admin access, not something
 this codebase change can complete.
+
+## Emergency Recovery
+
+`.github/repository-policy.yml` declares `main` with `enforce_admins: true` and no bypass actors
+(`clear_restrictions: true`) — nobody, including the repository owner, is exempted from requiring
+a passing `CI / required` status check to merge. That is deliberate (see Threat Model above), but
+it creates one failure mode this policy cannot resolve on its own: if `CI / required` itself
+becomes permanently unable to pass — a broken step in `ci.yml`, an expired/revoked pinned Action,
+a GitHub Actions outage — no PR can merge, including the PR that would fix the breakage.
+
+There is no policy field for "allow a bypass under condition X"; recovering from this is a manual,
+audited, time-boxed repository-settings change, not something `repo-policy` itself performs:
+
+1. **Confirm the required check is actually broken**, not just failing correctly on real
+   problems — re-run the `CI / required` job and read its logs before touching branch protection.
+2. **Temporarily relax the specific setting blocking the fix**, via the GitHub UI (Settings →
+   Branches → the `main` protection rule) or the REST API's branch-protection endpoint — e.g.
+   unchecking "Require status checks to pass" or "Include administrators" just long enough to
+   merge the one PR that repairs `CI / required`. Change the minimum needed, not the whole rule.
+3. **Merge the fix**, confirm `CI / required` passes again on `main` from a fresh run (not the
+   bypassed one).
+4. **Restore full protection immediately** — re-enable whatever was relaxed in step 2. Don't wait
+   for `policy-audit.yml`'s next scheduled run to notice; confirm it yourself with
+   `repo-policy audit --config .github/repository-policy.yml --repo shipsolid/repo-policy`
+   (0 = compliant again).
+5. **Open a follow-up issue the same day**, recording: what broke and why, exactly what was
+   temporarily relaxed and for how long, who performed the bypass, which PR/commit merged under
+   it, and confirmation from step 4 that protection was restored. This is the audit trail for an
+   event that, by definition, happened outside the normal PR-reviewed path.
 
 ## Known Limitations
 

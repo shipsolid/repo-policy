@@ -1,0 +1,80 @@
+name: Policy Audit
+
+# Continuously verifies that this repository's live GitHub configuration still matches
+# .github/repository-policy.yml -- the self-policy declared under Task 9 of the audit-remediation
+# plan. Read-only: runs `repo-policy audit` (README's CLI Reference: "Read-only compliance check"),
+# never `apply`. A drift finding fails this job (audit exits 1 on drift -- see README's Exit codes
+# table) so it shows up as a red workflow run, not just a log line nobody reads.
+on:
+  schedule:
+    - cron: "0 7 * * *" # daily, 07:00 UTC -- same cadence class as e2e.yml's live-fixture check
+  push:
+    branches: [main]
+    paths:
+      - ".github/repository-policy.yml"
+      - ".github/workflows/policy-audit.yml"
+  workflow_dispatch: {} # manual re-run, e.g. right after fixing a reported drift
+
+# Serializes overlapping runs (a schedule tick landing mid-way through a manual workflow_dispatch,
+# or two rapid pushes to the paths above) -- same reasoning as release.yml's concurrency group, but
+# queued rather than cancelled: an audit run is cheap and read-only, so there's no cost to letting
+# a queued one finish rather than dropping it.
+concurrency:
+  group: policy-audit
+  cancel-in-progress: false
+
+# No job inherits repo-default permissions; the job below declares exactly what it needs.
+permissions: {}
+
+jobs:
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # Runs the Action defined by THIS repository's own action.yml/Dockerfile, at exactly the
+      # commit this workflow run checked out -- not `uses: shipsolid/repo-policy@<sha>`.
+      #
+      # A cross-repo reference needs a real release to pin to, and none exists that reflects the
+      # current, audit-remediation-hardened Action: the latest published tag (v0.4.7) predates
+      # Tasks 1-8 of this plan entirely (predates even Task 1's merge), so its action.yml/Dockerfile
+      # is the pre-hardening version -- reproducible-build and SBOM/attestation work (Tasks 7-8)
+      # postdates it. Pinning this repo's own compliance audit to that stale SHA would mean
+      # auditing repo-policy's self-policy with a materially older, less-hardened build of the tool
+      # itself, which defeats the point of dogfooding. Inventing a SHA for a release that was never
+      # cut is worse: it would silently break the first time anyone tried to resolve it.
+      #
+      # `uses: ./` sidesteps the dilemma rather than working around it: the code that runs is
+      # exactly what `actions/checkout` (itself SHA-pinned above, same convention as ci.yml/
+      # security.yml) just fetched for this commit -- the same trust boundary the rest of this
+      # workflow file already has, with no separate network fetch of a mutable ref to pin against.
+      #
+      # zizmor --pedantic's self-repository audit suggests `$/` instead (GitHub's newer
+      # same-repository `uses:` form, which this repo's release.yml already uses for its
+      # `uses: $/.github/workflows/ci.yml` call) as stronger still. Deliberately NOT adopted here:
+      # `actionlint` (a separate, independent GitHub Actions syntax checker) rejects `$/` outright
+      # as an unrecognized format -- on this file and, when run against release.yml, on that
+      # pre-existing usage too. I could not independently confirm from GitHub's own current docs
+      # whether `$/` is real, or resolve the actionlint/zizmor disagreement, in this dispatch's
+      # scope. `./` is unambiguous, long-established, valid syntax that both tools accept, so it's
+      # the safer choice here; the `$/` question — including whether release.yml's existing usage
+      # actually works, which has not yet been exercised by a real GitHub Actions run (no release
+      # since v0.4.7, predating that change) — is flagged in this task's report as a concern for
+      # independent verification, not silently resolved either way.
+      - uses: ./
+        with:
+          config: .github/repository-policy.yml
+          mode: audit
+        env:
+          # Never secrets.GITHUB_TOKEN -- confirmed in README/SECURITY.md, its permission scopes
+          # never cover branch protection/ruleset administration under any `permissions:` grant.
+          # POLICY_AUDIT_TOKEN does not exist as a repository secret yet: it is a fine-grained PAT,
+          # scoped to this single repository, with Administration set to Read-only (audit never
+          # writes, so it never needs Read and write) -- creating and storing it is a live-repo
+          # setup step for whoever holds admin access, outside this dispatch's scope.
+          GITHUB_TOKEN: ${{ secrets.POLICY_AUDIT_TOKEN }}

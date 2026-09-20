@@ -1,0 +1,73 @@
+# repo-policy's own self-policy -- dogfooding the tool on the repo that builds it.
+#
+# Enforcement choice (main): `branch_protection`, not `ruleset`. ADR-0004 and Task 1 of the
+# audit-remediation plan made `ruleset` the more actively-hardened mechanism (effective-ruleset
+# applicability, canonical `repo-policy:<branch>` ownership naming, no bypass actors), and it would
+# otherwise be the preferred choice for dogfooding. But `required_conversation_resolution` below
+# has no GitHub Rulesets equivalent (src/repo_policy/models.py's FIELD_SPECS/
+# _RULESET_UNSUPPORTED_FIELDS, enforced by BranchPolicy._reject_ruleset_unsupported_fields) --
+# `enforcement: ruleset` with this field set fails `repo-policy validate` outright. Conversation
+# resolution is a non-negotiable requirement here, so `branch_protection` is the only schema-valid
+# choice that satisfies it, not a stylistic fallback.
+#
+# `signed_commits` is deliberately left unset (not `true`) on every branch below. The plan's Task 9
+# entry requires Tasks 1, 2, 6, and 10 complete before enabling it; Task 10 (dedicated release-bot
+# identity + SSH signing key infrastructure) has not been done yet. Enabling it now would make every
+# push -- including the maintainer's own -- fail signature verification with no working identity to
+# sign as.
+version: 1
+
+branches:
+  main:
+    enforcement: branch_protection
+
+    pull_requests:
+      required: true
+      # Zero mandatory approving reviews while the project has one maintainer -- there is no one
+      # else to approve, and requiring self-approval-adjacent review would just force clicking
+      # "approve" on your own PR, which enforces nothing. Raise this to >=1 the day a second active
+      # maintainer joins (see SECURITY.md's threat model: this is also the primary defense against
+      # a compromised-reviewer-free `policy.yml` edit slipping through once review exists).
+      approvals: 0
+      code_owner_review: false
+      # Harmless no-op at approvals: 0 (there's no approval to dismiss yet) -- set now so it's
+      # already correct the day approvals become non-zero, instead of a second PR to flip it then.
+      dismiss_stale_reviews: true
+      require_last_push_approval: false
+
+    status_checks:
+      # Task 6's stable name: the `required` job in ci.yml (workflow `CI`), which itself `needs:`
+      # every real gating job -- pointing here instead of at individual job names means adding or
+      # removing a CI job never requires a matching branch-policy edit.
+      required: ["CI / required"]
+
+    linear_history: true
+    allow_force_push: false
+    allow_deletion: false
+
+    # Admins (today: the sole maintainer) are not exempt from the rules above -- no silent
+    # self-bypass on a security-governance tool's own repo. See "Emergency recovery" in SECURITY.md
+    # for the documented, auditable way to temporarily lift this when it blocks a legitimate fix.
+    enforce_admins: true
+    required_conversation_resolution: true
+    lock_branch: false
+    # false pairs with lock_branch: false above -- BranchPolicy rejects allow_fork_syncing: true
+    # without lock_branch: true also set (GitHub silently resets it otherwise); declared explicitly
+    # so this policy's intent doesn't depend on remembering an undeclared default.
+    allow_fork_syncing: false
+    # Clears any push-restriction allowlist GitHub may already hold for this branch -- this policy
+    # is the single source of truth for who can push, not a GitHub UI setting made out-of-band.
+    clear_restrictions: true
+
+repo_settings:
+  delete_branch_on_merge: true
+  allow_update_branch: true
+  vulnerability_alerts: true
+  automated_security_fixes: true
+  private_vulnerability_reporting: true
+  # Closes the two gaps SECURITY.md's "Repository Settings Not Yet Enabled" section documents as
+  # open action items -- this policy is what turns them on once applied (see docs/ci-cd.md /
+  # SECURITY.md for why they weren't on already: they need repo-admin access this codebase change
+  # alone can't grant).
+  secret_scanning: true
+  secret_scanning_push_protection: true
