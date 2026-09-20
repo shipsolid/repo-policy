@@ -5,7 +5,28 @@ import pytest
 from repo_policy.apply import PartialApplyError
 from repo_policy.github_client import GitHubAPIError
 from repo_policy.models import PolicyConfig, RepoSettingsPolicy
-from repo_policy.repo_settings import apply_repo_settings, plan_repo_settings
+from repo_policy.policies.repo_settings import RepoSettingChange
+from repo_policy.repo_settings import RepoSettingsResult, apply_repo_settings, plan_repo_settings
+
+
+def test_repo_settings_result_compliant_when_no_changes_and_nothing_unavailable():
+    assert RepoSettingsResult().compliant is True
+
+
+def test_repo_settings_result_not_compliant_when_changes_exist():
+    result = RepoSettingsResult(
+        changes=[RepoSettingChange(field="delete_branch_on_merge", current_value=False, desired_value=True, action="modify")]
+    )
+    assert result.compliant is False
+
+
+def test_repo_settings_result_not_compliant_when_field_unavailable_even_with_no_changes():
+    """Task 4: a declared field GitHub reports structurally ineligible must never read as
+    compliant just because there's no pending Change to apply -- see
+    test_plan_repo_settings_records_unavailable_when_pvr_ineligible, which records exactly this
+    shape (unavailable non-empty, changes empty)."""
+    result = RepoSettingsResult(unavailable=["private_vulnerability_reporting"])
+    assert result.compliant is False
 
 
 def test_plan_repo_settings_returns_empty_result_when_section_absent():

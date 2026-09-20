@@ -24,6 +24,14 @@ class RepoSettingsResult:
     unavailable: list[str] = field(default_factory=list)
     applied: bool = False
 
+    @property
+    def compliant(self) -> bool:
+        """Mirrors audit.AuditResult.compliant's shape: a declared field GitHub reports
+        structurally ineligible (`unavailable`) must never read as compliant just because there's
+        no pending Change left to apply -- that field can never actually be satisfied, so it's
+        drift on its own, the same as a nonempty `changes`."""
+        return not self.changes and not self.unavailable
+
 
 def plan_repo_settings(client: GitHubClient, config: PolicyConfig) -> RepoSettingsResult:
     """Read-only: fetch current state and diff against policy.yml's repo_settings section. Makes

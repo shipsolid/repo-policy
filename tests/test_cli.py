@@ -97,13 +97,70 @@ def test_apply_exits_0_and_applies_changes(mock_client_cls):
     mock_client = mock_client_cls.return_value.__enter__.return_value
     mock_client.get_branch_protection.return_value = None
     mock_client.get_required_signatures.return_value = False
+
+    # Task 4: verify_after_apply re-reads live state after the mutation succeeds -- reflect what
+    # a real PUT would persist (the same round trip test_idempotency.py's apply-twice test
+    # already exercises) so the post-apply convergence check sees compliance and exit 0 holds.
+    def _put_branch_protection(branch, payload):
+        mock_client.get_branch_protection.return_value = payload
+
+    def _set_required_signatures(branch, enabled):
+        mock_client.get_required_signatures.return_value = enabled
+
+    mock_client.put_branch_protection.side_effect = _put_branch_protection
+    mock_client.set_required_signatures.side_effect = _set_required_signatures
+
     runner = CliRunner()
     result = runner.invoke(
         main,
         ["apply", "--config", "tests/fixtures/policy_valid.yml", "--repo", "acme/widgets", "--token", "t"],
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     mock_client.put_branch_protection.assert_called_once()
+
+
+@patch("repo_policy.cli.GitHubClient")
+def test_apply_exits_1_when_post_apply_read_shows_the_mutation_did_not_persist(mock_client_cls, tmp_path):
+    """Task 4 Step 1 / acceptance criterion: a 2xx PUT response alone can never produce a
+    successful apply. GitHub accepts the PUT without error, but the live state, once
+    independently re-read, still doesn't reflect required_linear_history -- e.g. an org ruleset
+    or webhook silently reverted it. Must exit 1 with the remaining drift printed, not the
+    "applied" success path a naive PUT-status check would take."""
+    mock_client = mock_client_cls.return_value.__enter__.return_value
+    mock_client.get_branch_protection.return_value = None  # never reflects the PUT
+    mock_client.get_required_signatures.return_value = False
+    config_path = tmp_path / "policy.yml"
+    config_path.write_text("version: 1\nbranches:\n  main:\n    linear_history: true\n")
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["apply", "--config", str(config_path), "--repo", "acme/widgets", "--token", "t"]
+    )
+    assert result.exit_code == 1
+    mock_client.put_branch_protection.assert_called_once()
+    assert "apply completed but policy is not converged" in result.output
+    assert "Linear history" in result.output
+
+
+@patch("repo_policy.cli.GitHubClient")
+def test_apply_exits_1_when_declared_setting_is_unavailable_on_the_repository(mock_client_cls, tmp_path):
+    """Task 4 Step 2: private_vulnerability_reporting declared true on a repository where GitHub
+    reports it structurally ineligible -- the mutation phase completes without raising (there's no
+    Change to apply, see plan_repo_settings), but the field can never actually be satisfied.
+    Must exit 1, not 0."""
+    mock_client = mock_client_cls.return_value.__enter__.return_value
+    mock_client.get_repo.return_value = {}
+    mock_client.get_private_vulnerability_reporting.return_value = None  # ineligible
+    config_path = tmp_path / "policy.yml"
+    config_path.write_text(
+        "version: 1\nbranches: {}\nrepo_settings:\n  private_vulnerability_reporting: true\n"
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["apply", "--config", str(config_path), "--repo", "acme/widgets", "--token", "t"]
+    )
+    assert result.exit_code == 1
+    assert "private_vulnerability_reporting" in result.output
+    assert "apply completed but policy is not converged" in result.output
 
 
 @patch("repo_policy.cli.GitHubClient")
@@ -111,14 +168,32 @@ def test_apply_strict_mode_shares_one_ruleset_fetch_between_apply_and_prune(mock
     mock_client = mock_client_cls.return_value.__enter__.return_value
     mock_client.get_branch_protection.return_value = None
     mock_client.get_required_signatures.return_value = False
-    mock_client.list_rulesets.return_value = [{"id": 9, "name": "repo-policy:removed-branch"}]
+    rulesets_state = [{"id": 9, "name": "repo-policy:removed-branch"}]
+    mock_client.list_rulesets.side_effect = lambda: list(rulesets_state)
+
+    def _put_branch_protection(branch, payload):
+        mock_client.get_branch_protection.return_value = payload
+
+    def _set_required_signatures(branch, enabled):
+        mock_client.get_required_signatures.return_value = enabled
+
+    def _delete_ruleset(ruleset_id):
+        rulesets_state[:] = [r for r in rulesets_state if r["id"] != ruleset_id]
+
+    mock_client.put_branch_protection.side_effect = _put_branch_protection
+    mock_client.set_required_signatures.side_effect = _set_required_signatures
+    mock_client.delete_ruleset.side_effect = _delete_ruleset
+
     runner = CliRunner()
     result = runner.invoke(
         main,
         ["apply", "--config", "tests/fixtures/policy_strict.yml", "--repo", "acme/widgets", "--token", "t"],
     )
-    assert result.exit_code == 0
-    assert mock_client.list_rulesets.call_count == 1
+    assert result.exit_code == 0, result.output
+    # Task 4: one prefetch before mutation (shared by apply_all + prune_rulesets, unchanged from
+    # before this task) plus one fresh fetch inside verify_after_apply's post-mutation audit_all --
+    # deliberately not the same cached list, since a just-pruned ruleset must be re-read live.
+    assert mock_client.list_rulesets.call_count == 2
     mock_client.delete_ruleset.assert_called_once_with(9)
     assert "removed orphaned ruleset repo-policy:removed-branch" in result.output
 
@@ -215,12 +290,18 @@ def test_plan_renders_repo_settings_drift(mock_client_cls):
 def test_apply_reports_partial_success_count_when_some_changes_are_unavailable(mock_client_cls, tmp_path):
     """A field that 422s (GHAS not licensed) lands in both result.changes and
     result.unavailable -- the printed "applied N change(s)" count must exclude it, not just the
-    applied boolean."""
+    applied boolean. Task 4: delete_branch_on_merge converges cleanly (round-tripped below via
+    update_repo_settings), but secret_scanning remains permanently unavailable -- so despite that
+    partial success, the overall apply must still exit 1, not 0 (see
+    test_apply_exits_1_when_declared_setting_is_unavailable_on_the_repository for the acceptance-
+    criteria-level version of this same gap)."""
     mock_client = mock_client_cls.return_value.__enter__.return_value
-    mock_client.get_repo.return_value = {
+    repo_response = {
         "delete_branch_on_merge": False,
         "security_and_analysis": {"secret_scanning": {"status": "disabled"}},
     }
+    mock_client.get_repo.return_value = repo_response
+    mock_client.update_repo_settings.side_effect = lambda payload: repo_response.update(payload)
     mock_client.update_security_and_analysis.return_value = None  # 422: GHAS not licensed
     config_path = tmp_path / "policy.yml"
     config_path.write_text(
@@ -231,9 +312,10 @@ def test_apply_reports_partial_success_count_when_some_changes_are_unavailable(m
     result = runner.invoke(
         main, ["apply", "--config", str(config_path), "--repo", "acme/widgets", "--token", "t"]
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 1, result.output
     assert "repo settings: applied 1 change(s)" in result.output
     assert "repo settings: secret_scanning unavailable on this repository" in result.output
+    assert "apply completed but policy is not converged" in result.output
 
 
 @patch("repo_policy.cli.GitHubClient")
@@ -260,13 +342,17 @@ def test_audit_reports_drift_for_declared_but_unavailable_setting_with_no_other_
 @patch("repo_policy.cli.GitHubClient")
 def test_apply_applies_repo_settings_drift(mock_client_cls):
     mock_client = mock_client_cls.return_value.__enter__.return_value
-    mock_client.get_repo.return_value = {"delete_branch_on_merge": False}
+    repo_response = {"delete_branch_on_merge": False}
+    mock_client.get_repo.return_value = repo_response
+    # Task 4: verify_after_apply re-reads get_repo() after the mutation -- reflect the write so
+    # the post-apply convergence check sees compliance and exit 0 holds.
+    mock_client.update_repo_settings.side_effect = lambda payload: repo_response.update(payload)
     runner = CliRunner()
     result = runner.invoke(
         main,
         ["apply", "--config", "tests/fixtures/policy_repo_settings.yml", "--repo", "acme/widgets", "--token", "t"],
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     mock_client.update_repo_settings.assert_called_once_with({"delete_branch_on_merge": True})
     assert "repo settings: applied 1 change(s)" in result.output
 
@@ -287,18 +373,41 @@ def test_audit_reports_stale_branch_protection_and_exits_1(mock_client_cls, tmp_
 
 
 @patch("repo_policy.cli.GitHubClient")
-def test_apply_reports_stale_branch_protection_warning(mock_client_cls, tmp_path):
+def test_apply_reports_stale_branch_protection_warning_and_exits_1(mock_client_cls, tmp_path):
+    """Task 4: repo-policy never deletes classic branch protection automatically (see
+    detect_stale_branch_protection's docstring), so once flagged it can never self-resolve -- but
+    apply must now report that as non-convergence via exit 1 (matching what audit/plan already do
+    for the same condition, e.g. test_audit_reports_stale_branch_protection_and_exits_1), not
+    silently exit 0 just because the ruleset mutation itself succeeded. The ruleset side of this
+    branch is round-tripped (created, then read back as canonical and effective) so exit 1 is
+    isolated to the stale-protection condition under test, not an artifact of a ruleset mock that
+    never reflects its own mutation."""
     mock_client = mock_client_cls.return_value.__enter__.return_value
-    mock_client.find_ruleset_by_name.return_value = None
     mock_client.get_branch_protection.return_value = {"enforce_admins": {"enabled": True}}
+    ruleset_state: dict = {}
+
+    def _find_ruleset_by_name(name, rulesets=None):
+        return ruleset_state.get(name)
+
+    def _create_ruleset(payload):
+        created = {**payload, "id": 1}
+        ruleset_state[payload["name"]] = created
+        return created
+
+    mock_client.find_ruleset_by_name.side_effect = _find_ruleset_by_name
+    mock_client.create_ruleset.side_effect = _create_ruleset
+    mock_client.get_rules_for_branch.return_value = [
+        {"type": "required_linear_history", "ruleset_id": 1, "ruleset_source_type": "Repository"}
+    ]
     config_path = tmp_path / "policy.yml"
     config_path.write_text("version: 1\nbranches:\n  main:\n    enforcement: ruleset\n    linear_history: true\n")
     runner = CliRunner()
     result = runner.invoke(
         main, ["apply", "--config", str(config_path), "--repo", "acme/widgets", "--token", "t"]
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 1, result.output
     assert "classic branch protection still exists" in result.output
+    assert "apply completed but policy is not converged" in result.output
 
 
 @patch("repo_policy.cli.GitHubClient")
