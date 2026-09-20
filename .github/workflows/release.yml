@@ -34,6 +34,69 @@ jobs:
     permissions:
       contents: read
 
+  # Deliberately has no `needs:` of its own -- it runs immediately, in parallel with `ci` above,
+  # not after it. This is a cheap, read-only, side-effect-free question ("does this commit's
+  # history contain any feat:/fix:/breaking-change commit since the last release tag?"), not a
+  # release-readiness gate, so it doesn't need CI's result to answer it, and answering it fast is
+  # the entire point (see below).
+  #
+  # Without this job, `release` below would sit behind `environment: release`'s human-approval gate
+  # on EVERY qualifying push to `main` -- including a chore:/docs:-only push that will never
+  # actually release anything -- just to let python-semantic-release discover there's nothing to
+  # do. That's more than an inconvenience on this repository: the whole pipeline runs under
+  # `concurrency: release-main` with `cancel-in-progress: false`, so an approval request nobody
+  # responds to (environment approvals default to a 30-day timeout) holds that concurrency slot the
+  # entire time, wedging every later push's `release` job -- and, transitively, their own `ci` job
+  # inside this same workflow run -- behind it. Gating `release` on this job's answer means only a
+  # push that actually warrants a release ever reaches the approval step.
+  check-release-warranted:
+    name: check-release-warranted
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      warranted: ${{ steps.check.outputs.warranted }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0 # semantic-release needs full history to walk back to the last release tag
+          persist-credentials: false # read-only job, never pushes anything
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      # `semantic-release version --print-tag` alone isn't enough to distinguish "nothing to
+      # release" from "a release is warranted" by exit code: confirmed by reading the installed
+      # 9.21.2's version.py and reproducing locally -- with no other flag, it prints a tag AND
+      # exits 0 in both cases (when nothing is warranted, it prints the *already-released* current
+      # tag, then a separate "already been released" notice, and returns 0). Root-level `--strict`
+      # changes that: it makes the "already released / nothing to bump" path `ctx.exit(2)` instead,
+      # confirmed the same way -- a fresh scratch repo with only chore: commits since its last tag
+      # exits 2 under `--strict version --print-tag` with no commit/tag/push side effects, and the
+      # same repo with a fix: commit added exits 0 and prints the new tag, also with zero side
+      # effects (print_only_tag short-circuits before any git-mutating code path runs). Installed
+      # via pip rather than the pinned Docker Action used below in `release`: the Action's own
+      # container doesn't expose a simple way to read this command's stdout/exit-code back into a
+      # host-side step, and this check only needs the plain CLI's `--print-tag` output.
+      - name: Check whether a release is warranted (no side effects)
+        id: check
+        run: |
+          set -euo pipefail
+          pip install --quiet "python-semantic-release==9.21.2"
+          if semantic-release --strict version --print-tag; then
+            echo "warranted=true" >> "$GITHUB_OUTPUT"
+          else
+            status=$?
+            if [ "$status" -eq 2 ]; then
+              echo "No release is warranted for this commit (no feat:/fix:/breaking-change commits since the last release tag)"
+              echo "warranted=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::semantic-release --print-tag failed unexpectedly (exit ${status}), not just 'nothing to release' -- treating this as a real failure rather than silently gating the release job closed"
+              exit "$status"
+            fi
+          fi
+
   # Task 9 applied real branch protection to `main`: pull_requests.required + enforce_admins, and
   # repo-policy deliberately never manages a PR-bypass allowlist for this repo (read-through, never
   # cleared/set -- see src/repo_policy/policies/pull_requests.py). That means nothing, including
@@ -47,13 +110,16 @@ jobs:
   # research trail (GitHub's own docs on rebase-merge and tag protection) behind this job's design.
   release:
     name: release
-    needs: ci
+    needs: [ci, check-release-warranted]
+    if: needs.check-release-warranted.outputs.warranted == 'true'
     runs-on: ubuntu-latest
     # Every real release now pauses here for a human approval click, by design: the `release`
     # GitHub Environment (create it with a required-reviewer protection rule -- see docs/ci-cd.md's
     # "What you still need to set up on GitHub") gates this job's start, and the release-bot's PAT
     # and SSH signing key are stored as secrets scoped to that environment, not as repository
     # secrets -- so they are not even materialized on the runner until the approval is granted.
+    # `check-release-warranted` above (no environment: gate of its own) is what keeps a
+    # non-release push from ever reaching this approval wait in the first place.
     environment: release
     timeout-minutes: 45 # bounds the PR-wait loop below against a hung/broken CI run blocking the release-main concurrency queue indefinitely
     permissions:
@@ -73,6 +139,39 @@ jobs:
           # step "Wait for the PR's required check and squash-merge it" below depends on to get a
           # real `CI / required` check on the PR's head commit.
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
+
+      # Host-side git signing config -- separate from, and IN ADDITION TO, the container-internal
+      # config the pinned python-semantic-release Action sets up for itself in the very next step.
+      # That Action runs as a Docker container action, where `$HOME` is `/github/home` (a
+      # runner-temp-dir bind mount) -- completely separate from the HOST's own `$HOME` that every
+      # plain `run:` step in this job (the verify-commit/verify-tag smoke test, both diff-checks,
+      # and the tag-creation/floating-tag steps further down) actually uses. Confirmed by tracing
+      # the pinned action's own `action.sh` and the Actions runner's `ContainerActionHandler.cs`
+      # source, and reproduced locally: `git verify-tag`/`git verify-commit`/`git tag -s` against
+      # the container's config paths all fail on the host with "Unable to open allowed keys file" /
+      # "Couldn't load public key". Without this step, every host-side signing/verification step
+      # below would fail -- the container step's own config never reaches them.
+      - name: Configure host-side git signing (separate $HOME from the PSR container step below)
+        env:
+          RELEASE_BOT_SIGNING_KEY: ${{ secrets.RELEASE_BOT_SIGNING_KEY }}
+          RELEASE_BOT_SSH_PUBLIC_KEY: ${{ vars.RELEASE_BOT_SSH_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/release_bot_signing_key"
+          allowed_signers_path="$RUNNER_TEMP/allowed_signers"
+          printf '%s\n' "$RELEASE_BOT_SIGNING_KEY" > "$key_path"
+          chmod 600 "$key_path"
+          # Principal must match git_committer_email used below (and in the PSR step's own
+          # container config) -- git verify-commit/git verify-tag check the signer's identity
+          # against this file's principal, not just that the key matches.
+          printf 'amitsingh007s+repopolicybot@gmail.com %s\n' "$RELEASE_BOT_SSH_PUBLIC_KEY" > "$allowed_signers_path"
+          git config --global gpg.format ssh
+          git config --global user.signingKey "$key_path"
+          git config --global gpg.ssh.allowedSignersFile "$allowed_signers_path"
+          git config --global commit.gpgsign true
+          git config --global tag.gpgsign true
+          git config --global user.name shipsolid-release-bot
+          git config --global user.email amitsingh007s+repopolicybot@gmail.com
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -184,18 +283,19 @@ jobs:
             --body "Automated version bump for ${RELEASE_TAG}, opened and merged by the release bot. See docs/ci-cd.md for how this pipeline works."
 
       # Retries plain `gh pr merge` on an interval rather than first polling check status
-      # (e.g. `gh pr checks --required --watch`): GitHub's fine-grained PATs currently cannot call
-      # the Checks API at all (confirmed against GitHub's own fine-grained-PAT permissions
-      # reference -- there is no selectable "Checks" repository permission, only the unrelated
-      # "Actions" and legacy "Commit statuses" ones, and community reports say even those don't
-      # reliably cover the check-run rollup a merged PR's required-check state depends on). Relying
-      # on RELEASE_BOT_TOKEN to independently read check-run status would mean depending on scope
-      # this token structurally can't be granted. `gh pr merge` doesn't have this problem: mergeability
+      # (e.g. `gh pr checks --required --watch`). This is a deliberate design choice, not a forced
+      # workaround: `RELEASE_BOT_TOKEN` is a classic PAT (see SECURITY.md's "Secrets Management" and
+      # setup checklist for why -- fine-grained PATs can't be issued by an outside-collaborator
+      # account on a personal-account-owned repo), and classic PATs CAN call the Checks API. This
+      # design is used anyway because `gh pr merge` doesn't need that permission at all: mergeability
       # -- including whether `CI / required` has actually passed -- is evaluated server-side by
       # GitHub itself as part of the merge attempt, using the repository's own branch-protection
-      # state, not the caller's read access to check details. So: just retry the merge itself until
-      # it succeeds or the timeout elapses; a "not mergeable yet" failure is the expected, retriable
-      # state while CI is still running on the PR.
+      # state, not the caller's read access to check details. That's a simpler dependency than
+      # polling check-run status directly, and it happens to also sidestep a real, separate gap
+      # (fine-grained PATs currently cannot call the Checks API at all -- confirmed against GitHub's
+      # own fine-grained-PAT permissions reference), should a future migration back to fine-grained
+      # ever happen. A "not mergeable yet" failure is the expected, retriable state while CI is
+      # still running on the PR.
       #
       # Squash, not rebase or merge commit: linear_history: true rules out a merge commit, and only
       # squash lets --subject override the final commit message on `main` -- required so `[skip ci]`
@@ -204,7 +304,16 @@ jobs:
       #
       # No --admin: this must be a real, fully-compliant merge (required check green, no bypass),
       # not a bot-flavored version of the shortcut Task 9 was built to close off.
+      #
+      # No --delete-branch: the repo's own self-policy already sets delete_branch_on_merge: true
+      # (.github/repository-policy.yml), so GitHub deletes the branch itself on merge. Keeping
+      # --delete-branch too risked exactly the failure mode found in review: the merge succeeds
+      # server-side, --delete-branch's own follow-up delete call errors independently (e.g. a race
+      # with GitHub's own automatic deletion), gh exits non-zero for the whole command, and this
+      # loop would then retry a "merge" that can never succeed again for the rest of the 30-minute
+      # window -- the PR is already merged, every retry after that point is pure, confusing waste.
       - name: Wait for the PR's required check and squash-merge it
+        id: merge
         if: steps.release.outputs.released == 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
@@ -212,33 +321,95 @@ jobs:
         run: |
           set -euo pipefail
           branch="release-bot/${RELEASE_TAG}"
-          deadline=$((SECONDS + 1800))
-          until gh pr merge "$branch" --squash --delete-branch \
-              --subject "chore(release): ${RELEASE_TAG} [skip ci]" \
-              --body ""; do
-            if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::Timed out waiting for the release PR to become mergeable (CI / required never passed, or another merge blocker didn't clear)"
-              exit 1
-            fi
-            echo "PR not mergeable yet (CI / required is likely still running) -- retrying in 15s"
-            sleep 15
-          done
+
+          # If this PR is already merged -- most likely a previous run of this job timed out
+          # *after* `gh pr merge` actually succeeded server-side but before this step recorded
+          # that (see the timeout/retry framing below), and the workflow was re-run -- skip the
+          # retry loop entirely instead of attempting a merge that can only ever fail from here.
+          state="$(gh pr view "$branch" --json state -q .state)"
+          if [ "$state" != "MERGED" ]; then
+            deadline=$((SECONDS + 1800))
+            while true; do
+              # Deliberately not just `until gh pr merge ...; do`: that form discards the command's
+              # output, which is exactly what the classification below needs to read to tell a
+              # transient "still waiting" failure from a permanent one.
+              #
+              # Capturing the real exit code this way (explicit if/else, not `if var=$(cmd); then
+              # ...; fi` with no else) matters more than it looks: without the else branch, bash
+              # collapses a false `if` condition's own exit status to 0 when nothing else in the
+              # branch runs -- confirmed by local scratch testing, where an earlier draft of this
+              # exact step silently exited 0 on a genuine, non-retriable merge failure because of
+              # this. `if/then/else` reads `$?` on the else branch's first line, before anything
+              # else changes it, which is well-defined and correct.
+              if output="$(gh pr merge "$branch" --squash \
+                  --subject "chore(release): ${RELEASE_TAG} [skip ci]" \
+                  --body "" 2>&1)"; then
+                status=0
+              else
+                status=$?
+              fi
+              echo "$output"
+              if [ "$status" -eq 0 ]; then
+                break
+              fi
+              # Classification is grounded in gh's own merge.go source (blockedReason(), v2 CLI),
+              # not guesswork:
+              #   - "the base branch policy prohibits the merge" (MergeStateStatus=BLOCKED) covers
+              #     both "CI / required is still running" AND "some other branch-protection
+              #     requirement isn't met yet" -- gh's own message can't distinguish the two, so
+              #     this is kept as the retriable default, bounded by the existing 30-minute
+              #     deadline either way (unchanged from before this fix).
+              #   - "the merge commit cannot be cleanly created" (MergeStateStatus=DIRTY, a real
+              #     conflict) and "the head branch is not up to date with the base branch"
+              #     (MergeStateStatus=BEHIND) can never resolve just by retrying `gh pr merge` --
+              #     nothing in this workflow updates the branch or resolves a conflict -- so both
+              #     fail fast instead of burning the full 30-minute window on a foregone conclusion.
+              #   - A permission-style failure (the bot's PAT losing write/merge access mid-run) is
+              #     not one of gh's own preflight-check strings above; it would surface as a raw
+              #     GraphQL/HTTP error from the merge mutation itself. Matched best-effort here
+              #     (not independently confirmed against a live failure -- no live token in this
+              #     dispatch) since retrying it for 30 minutes is never going to help either.
+              case "$output" in
+                *"the merge commit cannot be cleanly created"*|*"the head branch is not up to date with the base branch"*|*"Resource not accessible"*|*"do not have permission"*|*"Must have admin rights"*)
+                  echo "::error::Release PR merge failed with a non-retriable error: $output"
+                  exit "$status"
+                  ;;
+              esac
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "::error::Timed out waiting for the release PR to become mergeable (CI / required never passed, or another merge blocker didn't clear)"
+                exit 1
+              fi
+              echo "PR not mergeable yet (CI / required is likely still running) -- retrying in 15s"
+              sleep 15
+            done
+          fi
+
+          # Read back once, regardless of which path above got us here, so this is the single
+          # source of truth for "the exact commit the squash-merge produced" that both the diff
+          # re-check and the tag-creation step below use -- neither re-derives it from origin/main's
+          # current tip, which would be wrong (and racy) if any unrelated commit lands on `main` in
+          # the gap between this step and those.
+          merged_sha="$(gh pr view "$branch" --json mergeCommit -q .mergeCommit.oid)"
+          echo "merged_sha=${merged_sha}" >> "$GITHUB_OUTPUT"
 
       # Re-scoped from the pre-merge check above: this is the check that actually gates whether
       # this release proceeds to a signed tag and PyPI. GitHub's squash-merge always creates a new
       # commit on `main` (confirmed against GitHub's own docs -- see docs/ci-cd.md), so the object
       # that matters here is whatever actually landed on `main`, not the pre-merge local commit
-      # diffed earlier.
+      # diffed earlier. Diffs the exact merged commit (`MERGED_SHA`, captured by the merge step
+      # above from `gh pr view --json mergeCommit`) against its own immediate parent -- not against
+      # `origin/main`'s current tip, which was the pre-fix bug: that range is wrong (and racy) if
+      # any unrelated commit lands on `main` between this PR being opened and merged, since this
+      # check runs *after* the merge, when the release commit is already live.
       - name: Validate the merged release commit only touched version/changelog files
         if: steps.release.outputs.released == 'true'
         env:
-          SOURCE_SHA: ${{ github.sha }}
+          MERGED_SHA: ${{ steps.merge.outputs.merged_sha }}
         run: |
           set -euo pipefail
           git fetch origin main
-          merged_sha="$(git rev-parse origin/main)"
           allowed="pyproject.toml src/repo_policy/__init__.py CHANGELOG.md"
-          changed="$(git diff --name-only "$SOURCE_SHA" "$merged_sha")"
+          changed="$(git diff --name-only "${MERGED_SHA}^" "$MERGED_SHA")"
           unexpected=""
           while IFS= read -r file; do
             [ -z "$file" ] && continue
@@ -252,25 +423,41 @@ jobs:
             exit 1
           fi
 
-      # The tag, not the commit, is this pipeline's signed release artifact from here on. GitHub's
-      # squash-merge (confirmed against GitHub's own docs, see docs/ci-cd.md) always synthesizes a
-      # new commit server-side and never carries over -- or itself applies -- a signature from the
-      # release-bot's key, for any merge method. There is no way to get a client-signed, bot-
-      # attributed "Verified" commit onto `main` through a required PR merge; that's a GitHub
-      # platform constraint, not a gap in this design. An annotated, signed TAG is a separate git
-      # object from the commit it points at, so it doesn't have this problem: it is created and
-      # pushed here, directly (tags are outside branch protection's scope -- see this job's own
-      # top-level comment), against the exact commit that now actually sits on `main`, and carries
-      # its own valid signature regardless of whether that underlying commit is itself signed.
+      # The tag, not the commit, is this pipeline's release-bot-attributed signed artifact from here
+      # on -- but not because the squash-merge commit goes unverified. GitHub actually signs
+      # web-interface/API merge commits (including squash-merges) with its own key and shows them
+      # Verified on `main` (see https://github.com/web-flow.gpg and GitHub's own commit-signature-
+      # verification docs) -- that "no verification" language is specific to *rebase*-merge, which
+      # GitHub's docs state explicitly adds commits "without commit signature verification" because
+      # rebase replays them client-side and GitHub never actually authors the result. Squash-merge
+      # is not that case. So the merged commit on `main` DOES get a real, independently-Verified
+      # signature -- just GitHub's own (`web-flow`), attesting "GitHub performed this merge," not
+      # the release-bot's, attesting "the release-bot produced this release." There is still no way
+      # to get the release-bot's OWN signature onto that commit object through a required PR merge
+      # -- that part is an unavoidable platform constraint, not a gap in this design -- so the
+      # annotated release TAG remains this pipeline's release-bot-attributed verified artifact: a
+      # separate git object from the commit it points at, created and pushed here, directly (tags
+      # are outside branch protection's scope -- see this job's own top-level comment), against the
+      # exact commit that now actually sits on `main`, carrying its own valid bot signature
+      # regardless of whose signature (if any) the underlying commit itself carries. Both
+      # signatures are real and independently meaningful: GitHub's on the commit, the bot's on the
+      # tag -- see docs/ci-cd.md and SECURITY.md's "Release Signing" for the full picture.
+      #
+      # Uses MERGED_SHA (captured by the merge step above from `gh pr view --json mergeCommit`),
+      # not a fresh `git rev-parse origin/main` here -- re-deriving the tip at this point would tag
+      # whatever commit happens to be on `main` right now, which is only guaranteed to be this
+      # release's own commit if nothing else has merged into `main` in the meantime. Reusing the
+      # exact SHA the merge step already captured removes that race entirely, for the same reason
+      # the post-merge diff-check above does.
       - name: Create, sign, and push the version tag against the merged commit
         if: steps.release.outputs.released == 'true'
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          MERGED_SHA: ${{ steps.merge.outputs.merged_sha }}
         run: |
           set -euo pipefail
           git fetch origin main
-          merged_sha="$(git rev-parse origin/main)"
-          git tag -f -s -a "$RELEASE_TAG" -m "$RELEASE_TAG" "$merged_sha"
+          git tag -f -s -a "$RELEASE_TAG" -m "$RELEASE_TAG" "$MERGED_SHA"
           git push origin "refs/tags/${RELEASE_TAG}"
 
       # Fail closed: nothing past this point (floating tag move, GitHub release creation, and --
@@ -296,8 +483,24 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
+          set -euo pipefail
           MAJOR_TAG="v$(echo "$RELEASE_TAG" | sed -E 's/^v([0-9]+)\..*/\1/')"
-          git tag -f "$MAJOR_TAG" "$RELEASE_TAG"
+          # -c tag.gpgsign=false overrides, for this one command only, the tag.gpgsign=true set
+          # globally by the host-side signing config step above (Fix 1). Without the override,
+          # this command fails outright once tag.gpgsign is global: it creates a nested tag (no
+          # -a/-m of its own -- see below), and git refuses to sign a tag with no message
+          # ("fatal: no tag message?", exit 128) -- confirmed by local reproduction. Safe to
+          # disable signing for just this tag: $MAJOR_TAG (e.g. v0) is a floating convenience
+          # alias, not itself the verified release artifact -- the annotated $RELEASE_TAG it
+          # (transitively) points to is what's signed and verified (see the verify-tag step
+          # above). Deliberately NOT adding `^{}` to peel $RELEASE_TAG to its underlying commit:
+          # `git tag -f "$MAJOR_TAG" "$RELEASE_TAG"` (no ^{}) creates a nested lightweight tag
+          # pointing directly at the signed annotated tag OBJECT, and `git verify-tag "$MAJOR_TAG"`
+          # verifies transitively through that nesting -- confirmed by local scratch testing
+          # (ed25519 key, real allowed_signers file: a nested `tag -f` with no override fails
+          # closed once tag.gpgsign=true; `-c tag.gpgsign=false tag -f` succeeds and the resulting
+          # ref verifies cleanly). This is a beneficial existing property, kept as-is.
+          git -c tag.gpgsign=false tag -f "$MAJOR_TAG" "$RELEASE_TAG"
           git push origin "$MAJOR_TAG" --force
 
       # PSR's own `version` command can't be safely re-invoked here to create the GitHub Release --
