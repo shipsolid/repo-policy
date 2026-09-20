@@ -1,6 +1,6 @@
 # Digest-pinned so the base image can never drift out from under a released Action version --
 # resolved with: docker buildx imagetools inspect python:3.12-slim
-FROM python:3.12.14-slim-trixie@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9
+FROM python:3.14.6-slim-trixie@sha256:7bec7ddcddeff7975d6ba9b4be7dd6f6b2f55e7491539145e2978f7f97ce9144
 
 WORKDIR /app
 COPY pyproject.toml README.md ./
