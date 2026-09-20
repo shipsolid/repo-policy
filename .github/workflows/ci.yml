@@ -87,9 +87,15 @@ jobs:
       - run: pip install build
       - run: python -m build
       - name: Upload distribution artifacts for the wheel smoke-test job
+        # Named "wheel-smoke-dist", not "dist": release.yml invokes this workflow via
+        # `workflow_call` and its own `release` job (which uploads its own artifact literally
+        # named "dist") runs in that SAME workflow run, sharing one artifact namespace.
+        # actions/upload-artifact@v4 defaults to overwrite: false, so reusing "dist" here would
+        # 409-conflict with release.yml's upload on every real push to main -- a failure that
+        # never shows up on PR CI (release.yml only runs on push to main), only live.
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: dist
+          name: wheel-smoke-dist
           path: dist/
           retention-days: 1
           if-no-files-found: error
@@ -117,7 +123,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: dist
+          name: wheel-smoke-dist
           path: dist/
       - name: Install the built wheel into a clean environment (no dev extras)
         run: pip install dist/*.whl
