@@ -7,6 +7,7 @@ a field handled by one backend had no representation in the other's tests. This 
 every field in diff._FIELDS and asserts both backends actually respond to it, so a future field
 addition that's wired into only one translator fails loudly here instead of shipping silently.
 """
+
 import pytest
 
 from repo_policy.diff import _FIELDS
@@ -29,8 +30,11 @@ PERMISSIVE = BranchPolicy(
 
 RESTRICTIVE_VALUES = {
     "pull_requests": PullRequestPolicy(
-        required=True, approvals=2, code_owner_review=True,
-        dismiss_stale_reviews=True, require_last_push_approval=True,
+        required=True,
+        approvals=2,
+        code_owner_review=True,
+        dismiss_stale_reviews=True,
+        require_last_push_approval=True,
     ),
     "status_checks": StatusChecksPolicy(required=["build"]),
     "signed_commits": True,

@@ -235,22 +235,28 @@ class GitHubClient:
     def get_private_vulnerability_reporting(self) -> bool | None:
         """None means unavailable (404 or 422) -- not every repo is eligible."""
         response = self._request(
-            "GET", f"/repos/{self.owner}/{self.repo}/private-vulnerability-reporting",
-            allow_404=True, allow_422=True,
+            "GET",
+            f"/repos/{self.owner}/{self.repo}/private-vulnerability-reporting",
+            allow_404=True,
+            allow_422=True,
         )
         return _unwrap(_parse_json(response), False) if response is not None else None
 
     def enable_private_vulnerability_reporting(self) -> bool:
         """Returns False (meaning unavailable) on 422; True on success."""
         response = self._request(
-            "PUT", f"/repos/{self.owner}/{self.repo}/private-vulnerability-reporting", allow_422=True
+            "PUT",
+            f"/repos/{self.owner}/{self.repo}/private-vulnerability-reporting",
+            allow_422=True,
         )
         return response is not None
 
     def disable_private_vulnerability_reporting(self) -> bool:
         """Returns False (meaning unavailable) on 422; True on success."""
         response = self._request(
-            "DELETE", f"/repos/{self.owner}/{self.repo}/private-vulnerability-reporting", allow_422=True
+            "DELETE",
+            f"/repos/{self.owner}/{self.repo}/private-vulnerability-reporting",
+            allow_422=True,
         )
         return response is not None
 
@@ -258,8 +264,10 @@ class GitHubClient:
         """Returns None when GitHub Advanced Security isn't licensed on this repo (422) -- an
         expected, non-error outcome, not every repo has it. Any other failure still raises."""
         response = self._request(
-            "PATCH", f"/repos/{self.owner}/{self.repo}",
-            json={"security_and_analysis": payload}, allow_422=True,
+            "PATCH",
+            f"/repos/{self.owner}/{self.repo}",
+            json={"security_and_analysis": payload},
+            allow_422=True,
         )
         return _parse_json(response) if response is not None else None
 

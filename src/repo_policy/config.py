@@ -57,8 +57,10 @@ class _StrictLoader(yaml.SafeLoader):
                 duplicate = key in mapping
             except TypeError as exc:
                 raise yaml.constructor.ConstructorError(
-                    "while constructing a mapping", node.start_mark,
-                    "found unhashable key", key_node.start_mark,
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found unhashable key",
+                    key_node.start_mark,
                 ) from exc
             if duplicate:
                 mark = key_node.start_mark

@@ -15,7 +15,12 @@ def test_render_plan_shows_symbols_per_action():
     changes = [
         Change(field="linear_history", current_value=False, desired_value=True, action="add"),
         Change(field="allow_force_push", current_value=True, desired_value=False, action="remove"),
-        Change(field="pull_requests", current_value="1 approval", desired_value="2 approvals", action="modify"),
+        Change(
+            field="pull_requests",
+            current_value="1 approval",
+            desired_value="2 approvals",
+            action="modify",
+        ),
     ]
     output = render_plan("acme/widgets", "main", changes)
     assert "+ Linear history" in output
@@ -25,20 +30,30 @@ def test_render_plan_shows_symbols_per_action():
 
 
 def test_render_plan_singular_change_count():
-    changes = [Change(field="linear_history", current_value=False, desired_value=True, action="add")]
+    changes = [
+        Change(field="linear_history", current_value=False, desired_value=True, action="add")
+    ]
     output = render_plan("acme/widgets", "main", changes)
     assert "1 change required." in output
 
 
 def test_render_plan_shows_enforce_admins_label():
-    changes = [Change(field="enforce_admins", current_value=False, desired_value=True, action="add")]
+    changes = [
+        Change(field="enforce_admins", current_value=False, desired_value=True, action="add")
+    ]
     output = render_plan("acme/widgets", "main", changes)
     assert "+ Admin enforcement" in output
 
 
 def test_render_plan_shows_conversation_resolution_label():
-    changes = [Change(field="required_conversation_resolution", current_value=False,
-                       desired_value=True, action="add")]
+    changes = [
+        Change(
+            field="required_conversation_resolution",
+            current_value=False,
+            desired_value=True,
+            action="add",
+        )
+    ]
     output = render_plan("acme/widgets", "main", changes)
     assert "+ Conversation resolution" in output
 
@@ -50,25 +65,38 @@ def test_render_plan_shows_lock_branch_label():
 
 
 def test_render_plan_shows_fork_syncing_label():
-    changes = [Change(field="allow_fork_syncing", current_value=False, desired_value=True, action="add")]
+    changes = [
+        Change(field="allow_fork_syncing", current_value=False, desired_value=True, action="add")
+    ]
     output = render_plan("acme/widgets", "main", changes)
     assert "+ Fork syncing" in output
 
 
 def test_render_plan_shows_clear_restrictions_label():
-    changes = [Change(field="clear_restrictions", current_value=False, desired_value=True, action="add")]
+    changes = [
+        Change(field="clear_restrictions", current_value=False, desired_value=True, action="add")
+    ]
     output = render_plan("acme/widgets", "main", changes)
     assert "+ Push restrictions" in output
 
 
 def test_render_plan_shows_ruleset_enforcement_label():
-    changes = [Change(field="ruleset_enforcement", current_value="disabled", desired_value="active", action="modify")]
+    changes = [
+        Change(
+            field="ruleset_enforcement",
+            current_value="disabled",
+            desired_value="active",
+            action="modify",
+        )
+    ]
     output = render_plan("acme/widgets", "main", changes)
     assert "~ Ruleset enforcement" in output
 
 
 def test_render_plan_shows_ruleset_target_label():
-    changes = [Change(field="ruleset_target", current_value="tag", desired_value="branch", action="modify")]
+    changes = [
+        Change(field="ruleset_target", current_value="tag", desired_value="branch", action="modify")
+    ]
     output = render_plan("acme/widgets", "main", changes)
     assert "~ Ruleset target" in output
 
@@ -90,7 +118,9 @@ def test_render_plan_shows_ruleset_bypass_actors_label():
     changes = [
         Change(
             field="ruleset_bypass_actors",
-            current_value=[{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}],
+            current_value=[
+                {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}
+            ],
             desired_value=[],
             action="modify",
         )
@@ -115,7 +145,9 @@ def test_render_plan_shows_ruleset_effectiveness_label():
 def test_render_plan_falls_back_to_raw_field_name_for_unknown_field():
     """Defensive fallback: a future BranchPolicy field added to diff._FIELDS without a matching
     _LABELS entry must render its raw name instead of raising KeyError."""
-    changes = [Change(field="some_future_field", current_value=False, desired_value=True, action="add")]
+    changes = [
+        Change(field="some_future_field", current_value=False, desired_value=True, action="add")
+    ]
     output = render_plan("acme/widgets", "main", changes)
     assert "+ some_future_field" in output
 
@@ -126,9 +158,11 @@ def test_render_repo_settings_reports_no_changes():
 
 
 def test_render_repo_settings_shows_a_change():
-    result = RepoSettingsResult(changes=[
-        RepoSettingChange("delete_branch_on_merge", False, True, "add"),
-    ])
+    result = RepoSettingsResult(
+        changes=[
+            RepoSettingChange("delete_branch_on_merge", False, True, "add"),
+        ]
+    )
     output = render_repo_settings("acme/widgets", result)
     assert "+ Delete branch on merge" in output
 

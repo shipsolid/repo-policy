@@ -32,10 +32,14 @@ def test_diff_detects_modify():
 
 def test_diff_detects_approvals_increase_as_modify():
     current = PERMISSIVE.model_copy(
-        update={"pull_requests": PullRequestPolicy(required=True, approvals=1, code_owner_review=False)}
+        update={
+            "pull_requests": PullRequestPolicy(required=True, approvals=1, code_owner_review=False)
+        }
     )
     desired = PERMISSIVE.model_copy(
-        update={"pull_requests": PullRequestPolicy(required=True, approvals=2, code_owner_review=False)}
+        update={
+            "pull_requests": PullRequestPolicy(required=True, approvals=2, code_owner_review=False)
+        }
     )
     changes = diff(desired, current)
     assert len(changes) == 1
@@ -69,11 +73,15 @@ def test_allow_fork_syncing_normal_polarity_add_when_paired_with_lock_branch():
 def test_resolve_desired_managed_scope_inherits_current_for_unset_fields():
     desired = BranchPolicy(linear_history=True)  # everything else left unset
     current = PERMISSIVE.model_copy(
-        update={"pull_requests": PullRequestPolicy(required=True, approvals=3, code_owner_review=True)}
+        update={
+            "pull_requests": PullRequestPolicy(required=True, approvals=3, code_owner_review=True)
+        }
     )
     resolved = resolve_desired(desired, current, strict=False)
     assert resolved.linear_history is True
-    assert resolved.pull_requests == PullRequestPolicy(required=True, approvals=3, code_owner_review=True)
+    assert resolved.pull_requests == PullRequestPolicy(
+        required=True, approvals=3, code_owner_review=True
+    )
     changes = diff(resolved, current)
     assert len(changes) == 1
     assert changes[0].field == "linear_history"
@@ -90,7 +98,9 @@ def test_resolve_desired_strict_uses_schema_defaults_for_unset_fields():
         allow_deletion=False,
     )
     resolved = resolve_desired(desired, current, strict=True)
-    assert resolved.pull_requests == PullRequestPolicy(required=False, approvals=0, code_owner_review=False)
+    assert resolved.pull_requests == PullRequestPolicy(
+        required=False, approvals=0, code_owner_review=False
+    )
     assert resolved.status_checks is None
     assert resolved.signed_commits is False
     assert resolved.allow_force_push is True
@@ -118,27 +128,38 @@ def test_resolve_desired_managed_scope_merges_pull_requests_field_by_field():
     current = PERMISSIVE.model_copy(
         update={
             "pull_requests": PullRequestPolicy(
-                required=True, approvals=1, code_owner_review=True,
-                dismiss_stale_reviews=True, require_last_push_approval=True,
+                required=True,
+                approvals=1,
+                code_owner_review=True,
+                dismiss_stale_reviews=True,
+                require_last_push_approval=True,
             )
         }
     )
     resolved = resolve_desired(desired, current, strict=False)
     assert resolved.pull_requests == PullRequestPolicy(
-        required=True, approvals=2, code_owner_review=True,
-        dismiss_stale_reviews=True, require_last_push_approval=True,
+        required=True,
+        approvals=2,
+        code_owner_review=True,
+        dismiss_stale_reviews=True,
+        require_last_push_approval=True,
     )
 
 
 def test_resolve_desired_strict_merges_pull_requests_field_by_field_with_schema_defaults():
     desired = BranchPolicy(pull_requests=PullRequestPolicy(approvals=2))
     current = PERMISSIVE.model_copy(
-        update={"pull_requests": PullRequestPolicy(required=True, approvals=1, code_owner_review=True)}
+        update={
+            "pull_requests": PullRequestPolicy(required=True, approvals=1, code_owner_review=True)
+        }
     )
     resolved = resolve_desired(desired, current, strict=True)
     assert resolved.pull_requests == PullRequestPolicy(
-        required=False, approvals=2, code_owner_review=False,
-        dismiss_stale_reviews=False, require_last_push_approval=False,
+        required=False,
+        approvals=2,
+        code_owner_review=False,
+        dismiss_stale_reviews=False,
+        require_last_push_approval=False,
     )
 
 
@@ -160,6 +181,7 @@ def test_is_empty_does_not_misfire_on_unrelated_object_with_a_required_attribute
     happens to expose a .required attribute with different emptiness semantics would have been
     silently misclassified. Regression-proofing via a minimal stand-in object with a `.required`
     that's neither a bool nor a list."""
+
     class NotAPolicyValue:
         required = 42
 
@@ -186,10 +208,14 @@ def test_diff_treats_declared_not_required_pull_requests_as_equivalent_regardles
     return None whenever required is False, regardless of approvals/code_owner_review) -- diff()
     must not report drift over sub-fields that are irrelevant once required is False."""
     current = PERMISSIVE.model_copy(
-        update={"pull_requests": PullRequestPolicy(required=False, approvals=0, code_owner_review=False)}
+        update={
+            "pull_requests": PullRequestPolicy(required=False, approvals=0, code_owner_review=False)
+        }
     )
     desired = PERMISSIVE.model_copy(
-        update={"pull_requests": PullRequestPolicy(required=False, approvals=5, code_owner_review=True)}
+        update={
+            "pull_requests": PullRequestPolicy(required=False, approvals=5, code_owner_review=True)
+        }
     )
     assert diff(desired, current) == []
 
@@ -237,14 +263,22 @@ def test_diff_treats_status_checks_as_equal_regardless_of_context_order():
     contexts in a different order than policy.yml declared them, diff() must not report a
     permanent phantom 'modify' that re-issues an identical-content-but-reordered API call on
     every single apply without ever converging."""
-    current = PERMISSIVE.model_copy(update={"status_checks": StatusChecksPolicy(required=["build", "test"])})
-    desired = PERMISSIVE.model_copy(update={"status_checks": StatusChecksPolicy(required=["test", "build"])})
+    current = PERMISSIVE.model_copy(
+        update={"status_checks": StatusChecksPolicy(required=["build", "test"])}
+    )
+    desired = PERMISSIVE.model_copy(
+        update={"status_checks": StatusChecksPolicy(required=["test", "build"])}
+    )
     assert diff(desired, current) == []
 
 
 def test_diff_still_detects_a_real_status_checks_content_change():
-    current = PERMISSIVE.model_copy(update={"status_checks": StatusChecksPolicy(required=["build"])})
-    desired = PERMISSIVE.model_copy(update={"status_checks": StatusChecksPolicy(required=["build", "test"])})
+    current = PERMISSIVE.model_copy(
+        update={"status_checks": StatusChecksPolicy(required=["build"])}
+    )
+    desired = PERMISSIVE.model_copy(
+        update={"status_checks": StatusChecksPolicy(required=["build", "test"])}
+    )
     changes = diff(desired, current)
     assert len(changes) == 1
     assert changes[0].field == "status_checks"

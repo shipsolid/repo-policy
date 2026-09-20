@@ -31,10 +31,17 @@ action.yml, Dockerfile the GitHub Action
 ## Before opening a PR
 
 ```bash
+ruff format --check src tests
 ruff check src tests
 mypy src
-pytest -v
+pytest --cov=repo_policy --cov-branch --cov-report=term-missing --cov-fail-under=95
 ```
+
+CI runs this same test suite on every Python version `repo-policy` claims to support (3.10, 3.11,
+3.12, 3.13, 3.14 -- see `requires-python` in `pyproject.toml`), plus a wheel-install smoke test on
+the oldest and newest of those. Total branch coverage must stay at or above 95%
+(`--cov-fail-under=95`), and any formatting drift from `ruff format --check` blocks merging -- run
+`ruff format src tests` to fix it before committing.
 
 ## Commit messages
 

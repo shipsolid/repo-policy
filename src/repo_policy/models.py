@@ -94,12 +94,21 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     FieldSpec("allow_force_push", True, inverted=True, label="Force pushes"),
     FieldSpec("allow_deletion", True, inverted=True, label="Branch deletion"),
     FieldSpec("enforce_admins", False, ruleset_supported=False, label="Admin enforcement"),
-    FieldSpec("required_conversation_resolution", False, ruleset_supported=False,
-              label="Conversation resolution"),
+    FieldSpec(
+        "required_conversation_resolution",
+        False,
+        ruleset_supported=False,
+        label="Conversation resolution",
+    ),
     FieldSpec("lock_branch", False, ruleset_supported=False, label="Branch lock"),
     FieldSpec("allow_fork_syncing", False, ruleset_supported=False, label="Fork syncing"),
-    FieldSpec("clear_restrictions", True, inverted=True, ruleset_supported=False,
-              label="Push restrictions"),
+    FieldSpec(
+        "clear_restrictions",
+        True,
+        inverted=True,
+        ruleset_supported=False,
+        label="Push restrictions",
+    ),
 )
 
 # field name -> its permissive (no-op) value under enforcement: ruleset. Derived from FIELD_SPECS
@@ -138,7 +147,8 @@ class BranchPolicy(_PolicyModel):
         if self.enforcement != "ruleset":
             return self
         set_fields = [
-            name for name, permissive in _RULESET_UNSUPPORTED_FIELDS.items()
+            name
+            for name, permissive in _RULESET_UNSUPPORTED_FIELDS.items()
             if getattr(self, name) not in (None, permissive)
         ]
         if set_fields:

@@ -27,6 +27,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
       - run: ruff check src tests
+      - run: ruff format --check src tests
 
   typecheck:
     name: typecheck
@@ -44,24 +45,35 @@ jobs:
       - run: mypy src
 
   test:
-    name: test
+    # Task 12, Step 2: `requires-python = ">=3.10"` in pyproject.toml is a claim about every
+    # supported interpreter, not just whichever one CI happens to run on -- before this matrix, CI
+    # only ever proved the package worked on 3.12. lint/typecheck/build/security stay on a single
+    # Python version (3.12) below: those tools' own behavior doesn't vary across our supported
+    # range the way runtime semantics can, so matrixing them would only multiply CI time without
+    # adding coverage.
+    name: test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
-      - run: pytest -v
+      - run: pytest --cov=repo_policy --cov-branch --cov-report=term-missing --cov-fail-under=95
 
   build:
     name: build
     # Package-validation job: confirms sdist/wheel build cleanly before release.yml is ever
-    # allowed to run semantic-release against this commit.
+    # allowed to run semantic-release against this commit. Also the single source of the dist/
+    # artifacts the wheel-smoke job below installs, so the wheel it tests is built exactly once.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -74,6 +86,48 @@ jobs:
           python-version: "3.12"
       - run: pip install build
       - run: python -m build
+      - name: Upload distribution artifacts for the wheel smoke-test job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+          if-no-files-found: error
+
+  wheel-smoke:
+    # Task 12, Step 3: `pip install -e ".[dev]"` in the `test` matrix above never exercises the
+    # actual packaging path -- this job installs the real built wheel (no dev extras, no editable
+    # install) into clean interpreters at both ends of the supported range and proves the
+    # distributed artifact itself works, not just the source tree.
+    name: wheel-smoke (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dist
+          path: dist/
+      - name: Install the built wheel into a clean environment (no dev extras)
+        run: pip install dist/*.whl
+      - name: Verify the wheel imports and reports a well-formed version
+        run: |
+          python -c "import repo_policy; print(repo_policy.__version__)" | grep -Eq "^[0-9]+\.[0-9]+\.[0-9]+$"
+      - name: Verify the installed CLI's --help works
+        run: repo-policy --help
+      - name: Verify config validation works against a known-good policy file
+        run: repo-policy validate --config tests/fixtures/policy_valid.yml
 
   security:
     name: security
@@ -230,13 +284,13 @@ jobs:
             repo-policy-action:build1
 
   required:
-    # Stable status name ("CI / required") for branch protection to point at, independent of how
-    # many jobs feed it. Runs even if a dependency failed (if: always()) so it can report failure
+    # Stable status name ("required") for branch protection to point at, independent of how many
+    # jobs feed it. Runs even if a dependency failed (if: always()) so it can report failure
     # itself instead of silently disappearing as "skipped" - a skipped required check does not
     # block a merge, but a failed one does.
     name: required
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test, build, security, validate-self-policy, verify-action-lock, docker]
+    needs: [lint, typecheck, test, build, security, validate-self-policy, verify-action-lock, docker, wheel-smoke]
     if: always()
     permissions: {}
     steps:

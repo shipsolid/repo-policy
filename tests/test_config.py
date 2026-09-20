@@ -47,7 +47,9 @@ def test_load_policy_does_not_coerce_yaml_1_1_bareword_branch_names_to_booleans(
 
 def test_load_policy_still_parses_true_false_as_booleans(tmp_path):
     config_path = tmp_path / "policy.yml"
-    config_path.write_text("version: 1\nbranches:\n  main:\n    linear_history: true\n    signed_commits: false\n")
+    config_path.write_text(
+        "version: 1\nbranches:\n  main:\n    linear_history: true\n    signed_commits: false\n"
+    )
     config = load_policy(config_path)
     assert config.branches["main"].linear_history is True
     assert config.branches["main"].signed_commits is False
@@ -61,14 +63,18 @@ def test_load_policy_rejects_leading_zero_as_ambiguous(tmp_path):
     A leading-zero approvals count (e.g. from copy/paste alignment or a %02d-formatted generator)
     is a formatting mistake, not a policy this parser should guess the intent of."""
     config_path = tmp_path / "policy.yml"
-    config_path.write_text("version: 1\nbranches:\n  main:\n    pull_requests:\n      approvals: 010\n")
+    config_path.write_text(
+        "version: 1\nbranches:\n  main:\n    pull_requests:\n      approvals: 010\n"
+    )
     with pytest.raises(ConfigError):
         load_policy(config_path)
 
 
 def test_load_policy_still_parses_plain_decimal_ints(tmp_path):
     config_path = tmp_path / "policy.yml"
-    config_path.write_text("version: 1\nbranches:\n  main:\n    pull_requests:\n      approvals: 3\n")
+    config_path.write_text(
+        "version: 1\nbranches:\n  main:\n    pull_requests:\n      approvals: 3\n"
+    )
     config = load_policy(config_path)
     assert config.branches["main"].pull_requests.approvals == 3
 

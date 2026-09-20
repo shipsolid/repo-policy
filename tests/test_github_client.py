@@ -85,7 +85,10 @@ def test_request_does_not_retry_non_idempotent_post_on_500(client):
     )
     with pytest.raises(GitHubAPIError):
         client._request(
-            "POST", "/repos/acme/widgets/rulesets", json={"name": "repo-policy:main"}, idempotent=False
+            "POST",
+            "/repos/acme/widgets/rulesets",
+            json={"name": "repo-policy:main"},
+            idempotent=False,
         )
     assert route.call_count == 1
 
@@ -151,7 +154,10 @@ def test_request_does_not_retry_transport_error_for_non_idempotent_call(client):
     )
     with pytest.raises(GitHubAPIError):
         client._request(
-            "POST", "/repos/acme/widgets/rulesets", json={"name": "repo-policy:main"}, idempotent=False
+            "POST",
+            "/repos/acme/widgets/rulesets",
+            json={"name": "repo-policy:main"},
+            idempotent=False,
         )
     assert route.call_count == 1
 
@@ -163,7 +169,9 @@ def test_request_still_retries_post_on_429(client):
         httpx.Response(429, json={"message": "You have exceeded a secondary rate limit"}),
         httpx.Response(201, json={"id": 1, "name": "repo-policy:main"}),
     ]
-    response = client._request("POST", "/repos/acme/widgets/rulesets", json={"name": "repo-policy:main"})
+    response = client._request(
+        "POST", "/repos/acme/widgets/rulesets", json={"name": "repo-policy:main"}
+    )
     assert response.json()["id"] == 1
     assert route.call_count == 2
 
@@ -452,7 +460,9 @@ def test_delete_ruleset_calls_delete(client):
 @respx.mock
 def test_get_repo(client):
     respx.get("https://api.github.com/repos/acme/widgets").mock(
-        return_value=httpx.Response(200, json={"default_branch": "main", "delete_branch_on_merge": False})
+        return_value=httpx.Response(
+            200, json={"default_branch": "main", "delete_branch_on_merge": False}
+        )
     )
     data = client.get_repo()
     assert data["default_branch"] == "main"
@@ -641,7 +651,9 @@ def test_disable_private_vulnerability_reporting_unavailable_via_422(client):
 @respx.mock
 def test_update_security_and_analysis_succeeds(client):
     respx.patch("https://api.github.com/repos/acme/widgets").mock(
-        return_value=httpx.Response(200, json={"security_and_analysis": {"secret_scanning": {"status": "enabled"}}})
+        return_value=httpx.Response(
+            200, json={"security_and_analysis": {"secret_scanning": {"status": "enabled"}}}
+        )
     )
     data = client.update_security_and_analysis({"secret_scanning": {"status": "enabled"}})
     assert data is not None

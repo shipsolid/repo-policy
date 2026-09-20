@@ -35,9 +35,12 @@ def test_audit_exits_0_when_compliant(mock_client_cls):
         main,
         [
             "audit",
-            "--config", "tests/fixtures/policy_no_requirements.yml",
-            "--repo", "acme/widgets",
-            "--token", "t",
+            "--config",
+            "tests/fixtures/policy_no_requirements.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            "t",
         ],
     )
     assert result.exit_code == 0
@@ -52,7 +55,15 @@ def test_audit_exits_1_on_drift(mock_client_cls):
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["audit", "--config", "tests/fixtures/policy_valid.yml", "--repo", "acme/widgets", "--token", "t"],
+        [
+            "audit",
+            "--config",
+            "tests/fixtures/policy_valid.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            "t",
+        ],
     )
     assert result.exit_code == 1
 
@@ -72,7 +83,15 @@ def test_audit_reports_orphaned_ruleset_and_exits_1_in_strict_mode(mock_client_c
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["audit", "--config", "tests/fixtures/policy_strict.yml", "--repo", "acme/widgets", "--token", "t"],
+        [
+            "audit",
+            "--config",
+            "tests/fixtures/policy_strict.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            "t",
+        ],
     )
     assert result.exit_code == 1
     assert "orphaned ruleset repo-policy:removed-branch detected" in result.output
@@ -86,7 +105,15 @@ def test_plan_renders_diff_and_exits_1_on_drift(mock_client_cls):
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["plan", "--config", "tests/fixtures/policy_valid.yml", "--repo", "acme/widgets", "--token", "t"],
+        [
+            "plan",
+            "--config",
+            "tests/fixtures/policy_valid.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            "t",
+        ],
     )
     assert result.exit_code == 1
     assert "Repository: acme/widgets" in result.output
@@ -113,14 +140,24 @@ def test_apply_exits_0_and_applies_changes(mock_client_cls):
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["apply", "--config", "tests/fixtures/policy_valid.yml", "--repo", "acme/widgets", "--token", "t"],
+        [
+            "apply",
+            "--config",
+            "tests/fixtures/policy_valid.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            "t",
+        ],
     )
     assert result.exit_code == 0, result.output
     mock_client.put_branch_protection.assert_called_once()
 
 
 @patch("repo_policy.cli.GitHubClient")
-def test_apply_exits_1_when_post_apply_read_shows_the_mutation_did_not_persist(mock_client_cls, tmp_path):
+def test_apply_exits_1_when_post_apply_read_shows_the_mutation_did_not_persist(
+    mock_client_cls, tmp_path
+):
     """Task 4 Step 1 / acceptance criterion: a 2xx PUT response alone can never produce a
     successful apply. GitHub accepts the PUT without error, but the live state, once
     independently re-read, still doesn't reflect required_linear_history -- e.g. an org ruleset
@@ -142,7 +179,9 @@ def test_apply_exits_1_when_post_apply_read_shows_the_mutation_did_not_persist(m
 
 
 @patch("repo_policy.cli.GitHubClient")
-def test_apply_exits_1_when_declared_setting_is_unavailable_on_the_repository(mock_client_cls, tmp_path):
+def test_apply_exits_1_when_declared_setting_is_unavailable_on_the_repository(
+    mock_client_cls, tmp_path
+):
     """Task 4 Step 2: private_vulnerability_reporting declared true on a repository where GitHub
     reports it structurally ineligible -- the mutation phase completes without raising (there's no
     Change to apply, see plan_repo_settings), but the field can never actually be satisfied.
@@ -187,7 +226,15 @@ def test_apply_strict_mode_shares_one_ruleset_fetch_between_apply_and_prune(mock
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["apply", "--config", "tests/fixtures/policy_strict.yml", "--repo", "acme/widgets", "--token", "t"],
+        [
+            "apply",
+            "--config",
+            "tests/fixtures/policy_strict.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            "t",
+        ],
     )
     assert result.exit_code == 0, result.output
     # Task 4: one prefetch before mutation (shared by apply_all + prune_rulesets, unchanged from
@@ -203,7 +250,15 @@ def test_audit_reports_usage_error_on_malformed_repo(mock_client_cls):
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["audit", "--config", "tests/fixtures/policy_no_requirements.yml", "--repo", "widgets", "--token", "t"],
+        [
+            "audit",
+            "--config",
+            "tests/fixtures/policy_no_requirements.yml",
+            "--repo",
+            "widgets",
+            "--token",
+            "t",
+        ],
     )
     assert result.exit_code == 2
     assert "invalid repository" in result.output
@@ -221,9 +276,12 @@ def test_audit_reports_usage_error_on_repo_with_extra_slashes(mock_client_cls):
         main,
         [
             "audit",
-            "--config", "tests/fixtures/policy_no_requirements.yml",
-            "--repo", "acme/widgets/extra",
-            "--token", "t",
+            "--config",
+            "tests/fixtures/policy_no_requirements.yml",
+            "--repo",
+            "acme/widgets/extra",
+            "--token",
+            "t",
         ],
     )
     assert result.exit_code == 2
@@ -232,7 +290,9 @@ def test_audit_reports_usage_error_on_repo_with_extra_slashes(mock_client_cls):
 
 
 @patch("repo_policy.cli.GitHubClient")
-def test_audit_reports_usage_error_when_repo_cannot_be_resolved(mock_client_cls, tmp_path, monkeypatch):
+def test_audit_reports_usage_error_when_repo_cannot_be_resolved(
+    mock_client_cls, tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
     (tmp_path / "policy.yml").write_text("version: 1\nbranches:\n  main: {}\n")
@@ -249,7 +309,13 @@ def test_audit_reports_usage_error_when_no_token_configured(mock_client_cls, mon
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["audit", "--config", "tests/fixtures/policy_no_requirements.yml", "--repo", "acme/widgets"],
+        [
+            "audit",
+            "--config",
+            "tests/fixtures/policy_no_requirements.yml",
+            "--repo",
+            "acme/widgets",
+        ],
     )
     assert result.exit_code == 2
     assert "no GitHub token" in result.output
@@ -266,7 +332,15 @@ def test_audit_ignores_repo_settings_when_no_branches_declared_and_section_absen
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["audit", "--config", "tests/fixtures/policy_no_requirements.yml", "--repo", "acme/widgets", "--token", "t"],
+        [
+            "audit",
+            "--config",
+            "tests/fixtures/policy_no_requirements.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            "t",
+        ],
     )
     assert result.exit_code == 0
     mock_client.get_repo.assert_not_called()
@@ -279,7 +353,15 @@ def test_plan_renders_repo_settings_drift(mock_client_cls):
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["plan", "--config", "tests/fixtures/policy_repo_settings.yml", "--repo", "acme/widgets", "--token", "t"],
+        [
+            "plan",
+            "--config",
+            "tests/fixtures/policy_repo_settings.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            "t",
+        ],
     )
     assert result.exit_code == 1
     assert "Repo-level settings:" in result.output
@@ -287,7 +369,9 @@ def test_plan_renders_repo_settings_drift(mock_client_cls):
 
 
 @patch("repo_policy.cli.GitHubClient")
-def test_apply_reports_partial_success_count_when_some_changes_are_unavailable(mock_client_cls, tmp_path):
+def test_apply_reports_partial_success_count_when_some_changes_are_unavailable(
+    mock_client_cls, tmp_path
+):
     """A field that 422s (GHAS not licensed) lands in both result.changes and
     result.unavailable -- the printed "applied N change(s)" count must exclude it, not just the
     applied boolean. Task 4: delete_branch_on_merge converges cleanly (round-tripped below via
@@ -319,7 +403,9 @@ def test_apply_reports_partial_success_count_when_some_changes_are_unavailable(m
 
 
 @patch("repo_policy.cli.GitHubClient")
-def test_audit_reports_drift_for_declared_but_unavailable_setting_with_no_other_changes(mock_client_cls, tmp_path):
+def test_audit_reports_drift_for_declared_but_unavailable_setting_with_no_other_changes(
+    mock_client_cls, tmp_path
+):
     """A declared repo-setting that's structurally ineligible (e.g. private_vulnerability_reporting
     on a repo that doesn't support it) must not be silently dropped just because there's zero
     other drift -- the policy can never actually be satisfied, so this must not report compliant."""
@@ -350,7 +436,15 @@ def test_apply_applies_repo_settings_drift(mock_client_cls):
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["apply", "--config", "tests/fixtures/policy_repo_settings.yml", "--repo", "acme/widgets", "--token", "t"],
+        [
+            "apply",
+            "--config",
+            "tests/fixtures/policy_repo_settings.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            "t",
+        ],
     )
     assert result.exit_code == 0, result.output
     mock_client.update_repo_settings.assert_called_once_with({"delete_branch_on_merge": True})
@@ -400,7 +494,9 @@ def test_apply_reports_stale_branch_protection_warning_and_exits_1(mock_client_c
         {"type": "required_linear_history", "ruleset_id": 1, "ruleset_source_type": "Repository"}
     ]
     config_path = tmp_path / "policy.yml"
-    config_path.write_text("version: 1\nbranches:\n  main:\n    enforcement: ruleset\n    linear_history: true\n")
+    config_path.write_text(
+        "version: 1\nbranches:\n  main:\n    enforcement: ruleset\n    linear_history: true\n"
+    )
     runner = CliRunner()
     result = runner.invoke(
         main, ["apply", "--config", str(config_path), "--repo", "acme/widgets", "--token", "t"]
@@ -414,7 +510,8 @@ def test_apply_reports_stale_branch_protection_warning_and_exits_1(mock_client_c
 def test_audit_reports_config_error_on_invalid_managed_scope_merge(mock_client_cls, tmp_path):
     mock_client = mock_client_cls.return_value.__enter__.return_value
     mock_client.get_branch_protection.return_value = {
-        "allow_fork_syncing": True, "lock_branch": True,
+        "allow_fork_syncing": True,
+        "lock_branch": True,
     }
     mock_client.get_required_signatures.return_value = False
     config_path = tmp_path / "policy.yml"
@@ -427,7 +524,9 @@ def test_audit_reports_config_error_on_invalid_managed_scope_merge(mock_client_c
 
 
 @patch("repo_policy.cli.GitHubClient")
-def test_audit_reports_usage_error_when_git_remote_command_fails(mock_client_cls, tmp_path, monkeypatch):
+def test_audit_reports_usage_error_when_git_remote_command_fails(
+    mock_client_cls, tmp_path, monkeypatch
+):
     """A nonzero exit from `git remote get-url origin` (e.g. no such remote) must not be silently
     parsed as if it succeeded -- only checking stdout content (not returncode) risks treating a
     failing command's incidental stdout as a valid owner/repo pair."""
@@ -435,7 +534,9 @@ def test_audit_reports_usage_error_when_git_remote_command_fails(mock_client_cls
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
     (tmp_path / "policy.yml").write_text("version: 1\nbranches:\n  main: {}\n")
     with patch("repo_policy.cli.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=128, stdout="", stderr="fatal: no such remote 'origin'")
+        mock_run.return_value = MagicMock(
+            returncode=128, stdout="", stderr="fatal: no such remote 'origin'"
+        )
         runner = CliRunner()
         result = runner.invoke(main, ["audit", "--token", "t"])
     assert result.exit_code == 2
@@ -445,7 +546,9 @@ def test_audit_reports_usage_error_when_git_remote_command_fails(mock_client_cls
 
 @patch("repo_policy.cli.subprocess.run", side_effect=FileNotFoundError("git not found"))
 @patch("repo_policy.cli.GitHubClient")
-def test_audit_reports_usage_error_when_git_binary_is_missing(mock_client_cls, mock_run, tmp_path, monkeypatch):
+def test_audit_reports_usage_error_when_git_binary_is_missing(
+    mock_client_cls, mock_run, tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
     (tmp_path / "policy.yml").write_text("version: 1\nbranches:\n  main: {}\n")
@@ -496,7 +599,9 @@ def test_apply_exits_3_and_reports_partial_success_when_a_repo_setting_mutation_
     mock_client.get_repo.return_value = {}
     mock_client.get_vulnerability_alerts.return_value = False
     mock_client.get_automated_security_fixes.return_value = False
-    mock_client.enable_automated_security_fixes.side_effect = GitHubAPIError("boom", status_code=500)
+    mock_client.enable_automated_security_fixes.side_effect = GitHubAPIError(
+        "boom", status_code=500
+    )
     config_path = tmp_path / "policy.yml"
     config_path.write_text(
         "version: 1\nbranches: {}\nrepo_settings:\n"
@@ -530,9 +635,12 @@ def test_audit_reports_config_error_when_client_construction_fails_under_proxy_m
         main,
         [
             "audit",
-            "--config", "tests/fixtures/policy_no_requirements.yml",
-            "--repo", "acme/widgets",
-            "--token", "t",
+            "--config",
+            "tests/fixtures/policy_no_requirements.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            "t",
         ],
     )
     assert result.exit_code == 2
@@ -564,7 +672,9 @@ def test_cli_errors_never_leak_the_supplied_token(mock_client_cls):
     token string never appears anywhere in stdout/stderr -- guarding against a future change that
     accidentally interpolates the raw token into a GitHubAPIError message, a click exception, or
     an uncaught traceback instead of the response text alone."""
-    secret_token = "ghp_ThisTokenMustNeverAppearInAnyCLIOutput000111"  # test fixture, not a real credential
+    secret_token = (
+        "ghp_ThisTokenMustNeverAppearInAnyCLIOutput000111"  # test fixture, not a real credential
+    )
     mock_client = mock_client_cls.return_value.__enter__.return_value
     mock_client.get_branch_protection.side_effect = GitHubAPIError(
         "GitHub API error 401 on GET /repos/acme/widgets/branches/main/protection: Bad credentials",
@@ -572,9 +682,33 @@ def test_cli_errors_never_leak_the_supplied_token(mock_client_cls):
     )
     runner = CliRunner()
     for args in (
-        ["audit", "--config", "tests/fixtures/policy_valid.yml", "--repo", "acme/widgets", "--token", secret_token],
-        ["plan", "--config", "tests/fixtures/policy_valid.yml", "--repo", "acme/widgets", "--token", secret_token],
-        ["apply", "--config", "tests/fixtures/policy_valid.yml", "--repo", "acme/widgets", "--token", secret_token],
+        [
+            "audit",
+            "--config",
+            "tests/fixtures/policy_valid.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            secret_token,
+        ],
+        [
+            "plan",
+            "--config",
+            "tests/fixtures/policy_valid.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            secret_token,
+        ],
+        [
+            "apply",
+            "--config",
+            "tests/fixtures/policy_valid.yml",
+            "--repo",
+            "acme/widgets",
+            "--token",
+            secret_token,
+        ],
     ):
         result = runner.invoke(main, args)
         assert result.exit_code == 3, result.output

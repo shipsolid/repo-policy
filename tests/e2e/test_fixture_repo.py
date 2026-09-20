@@ -59,13 +59,17 @@ def test_full_policy_lifecycle(clean_fixture_repo, e2e_token, live_client, raw_h
 
     # 1. Clean baseline: clean_fixture_repo's setup already guarantees this (no branch protection,
     #    no rulesets) -- confirmed here via `plan` reporting full drift on both branches.
-    baseline_plan = _invoke("plan", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token)
+    baseline_plan = _invoke(
+        "plan", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token
+    )
     assert baseline_plan.exit_code == 1, baseline_plan.output
     assert "Branch: main" in baseline_plan.output
     assert f"Branch: {RULESET_BRANCH}" in baseline_plan.output
 
     # 2. Apply the full policy.
-    apply_result = _invoke("apply", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token)
+    apply_result = _invoke(
+        "apply", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token
+    )
     assert apply_result.exit_code == 0, apply_result.output
 
     # 3. Independent API verification: bypass repo-policy's own read path entirely (Task 11 Step 5
@@ -77,11 +81,15 @@ def test_full_policy_lifecycle(clean_fixture_repo, e2e_token, live_client, raw_h
 
     # 4. No-drift audit: repo-policy's own read path, but a fresh process-level command from
     #    apply's internal post-mutation check -- proves real-world idempotency against a live repo.
-    audit_result = _invoke("audit", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token)
+    audit_result = _invoke(
+        "audit", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token
+    )
     assert audit_result.exit_code == 0, audit_result.output
     assert "is compliant" in audit_result.output
 
-    no_drift_plan = _invoke("plan", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token)
+    no_drift_plan = _invoke(
+        "plan", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token
+    )
     assert no_drift_plan.exit_code == 0, no_drift_plan.output
     assert no_drift_plan.output.count("No changes required.") == 2
 
@@ -93,14 +101,18 @@ def test_full_policy_lifecycle(clean_fixture_repo, e2e_token, live_client, raw_h
     before = live_client.find_ruleset_by_name(RULESET_NAME)
     assert before is not None, "precondition failed: expected ruleset from the prior apply/repair"
 
-    prune_result = _invoke("apply", "--config", PRUNE_POLICY, "--repo", LIVE_REPO, "--token", e2e_token)
+    prune_result = _invoke(
+        "apply", "--config", PRUNE_POLICY, "--repo", LIVE_REPO, "--token", e2e_token
+    )
     assert prune_result.exit_code == 0, prune_result.output
     assert f"- removed orphaned ruleset {RULESET_NAME}" in prune_result.output
 
     after = live_client.find_ruleset_by_name(RULESET_NAME)
     assert after is None
 
-    prune_audit = _invoke("audit", "--config", PRUNE_POLICY, "--repo", LIVE_REPO, "--token", e2e_token)
+    prune_audit = _invoke(
+        "audit", "--config", PRUNE_POLICY, "--repo", LIVE_REPO, "--token", e2e_token
+    )
     assert prune_audit.exit_code == 0, prune_audit.output
     assert "is compliant" in prune_audit.output
 
@@ -155,7 +167,9 @@ def _assert_repo_policy_verify_ruleset_matches_policy(live_client: GitHubClient)
     contexts = {c["context"] for c in status_check_rule["parameters"]["required_status_checks"]}
     assert STATUS_CHECK_CONTEXT in contexts
 
-    active_ruleset_ids = {r.get("ruleset_id") for r in live_client.get_rules_for_branch(RULESET_BRANCH)}
+    active_ruleset_ids = {
+        r.get("ruleset_id") for r in live_client.get_rules_for_branch(RULESET_BRANCH)
+    }
     assert ruleset["id"] in active_ruleset_ids
 
 
@@ -196,14 +210,18 @@ def _run_ineffective_ruleset_repair_scenario(
     assert disable_response.status_code == 200, disable_response.text
     assert live_client.get_ruleset(ruleset_id)["enforcement"] == "disabled"  # perturbation landed
 
-    drift_audit = _invoke("audit", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token)
+    drift_audit = _invoke(
+        "audit", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token
+    )
     assert drift_audit.exit_code == 1, drift_audit.output
     assert f"{RULESET_BRANCH}: 1 change(s) required" in drift_audit.output
 
     drift_plan = _invoke("plan", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token)
     assert "Ruleset enforcement" in drift_plan.output
 
-    repair_result = _invoke("apply", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token)
+    repair_result = _invoke(
+        "apply", "--config", FULL_POLICY, "--repo", LIVE_REPO, "--token", e2e_token
+    )
     assert repair_result.exit_code == 0, repair_result.output
 
     assert live_client.get_ruleset(ruleset_id)["enforcement"] == "active"

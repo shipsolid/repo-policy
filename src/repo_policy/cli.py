@@ -134,7 +134,9 @@ def validate(config_path: str) -> None:
 
 
 def _compute_drift(
-    results: list[AuditResult], orphaned_rulesets: list[str], repo_settings_result: RepoSettingsResult
+    results: list[AuditResult],
+    orphaned_rulesets: list[str],
+    repo_settings_result: RepoSettingsResult,
 ) -> bool:
     """The one drift definition shared by _run_check (audit/plan) and verify_after_apply (apply's
     post-mutation convergence check): any branch's own noncompliance (declared-field drift,
@@ -316,7 +318,9 @@ def apply(config_path: str, repo: str | None, token: str | None) -> None:
 
     if repo_settings_result.applied:
         applied_count = sum(
-            1 for c in repo_settings_result.changes if c.field not in repo_settings_result.unavailable
+            1
+            for c in repo_settings_result.changes
+            if c.field not in repo_settings_result.unavailable
         )
         click.echo(f"repo settings: applied {applied_count} change(s)")
     for field_name in repo_settings_result.unavailable:
@@ -324,7 +328,11 @@ def apply(config_path: str, repo: str | None, token: str | None) -> None:
 
     if _compute_drift(verify_results, verify_orphaned_rulesets, verify_repo_settings):
         _render_findings(
-            resolved_repo, verify_results, verify_orphaned_rulesets, verify_repo_settings, render=True
+            resolved_repo,
+            verify_results,
+            verify_orphaned_rulesets,
+            verify_repo_settings,
+            render=True,
         )
         click.echo("apply completed but policy is not converged")
         sys.exit(EXIT_DRIFT)

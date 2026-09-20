@@ -15,8 +15,11 @@ def test_to_branch_protection_builds_payload():
 
 def test_to_branch_protection_includes_dismiss_stale_reviews_and_last_push_approval():
     policy = PullRequestPolicy(
-        required=True, approvals=2, code_owner_review=True,
-        dismiss_stale_reviews=True, require_last_push_approval=True,
+        required=True,
+        approvals=2,
+        code_owner_review=True,
+        dismiss_stale_reviews=True,
+        require_last_push_approval=True,
     )
     payload = pull_requests.to_branch_protection(policy)
     assert payload["dismiss_stale_reviews"] is True
@@ -43,13 +46,19 @@ def test_to_branch_protection_preserves_dismissal_restrictions_from_current_stat
             "teams": [{"slug": "justice-league", "id": 2}],
         },
         "bypass_pull_request_allowances": {
-            "users": [], "teams": [], "apps": [{"slug": "dependabot", "id": 3}],
+            "users": [],
+            "teams": [],
+            "apps": [{"slug": "dependabot", "id": 3}],
         },
     }
     payload = pull_requests.to_branch_protection(policy, current=current)
     assert payload["dismissal_restrictions"] == {"users": ["octocat"], "teams": ["justice-league"]}
     assert "apps" not in payload["dismissal_restrictions"]
-    assert payload["bypass_pull_request_allowances"] == {"users": [], "teams": [], "apps": ["dependabot"]}
+    assert payload["bypass_pull_request_allowances"] == {
+        "users": [],
+        "teams": [],
+        "apps": ["dependabot"],
+    }
 
 
 def test_to_branch_protection_omits_dismissal_restrictions_when_none_exist():
@@ -133,8 +142,11 @@ def test_from_ruleset_rule_reads_rule():
 
 def test_ruleset_rule_round_trips_dismiss_stale_reviews_and_last_push_approval():
     policy = PullRequestPolicy(
-        required=True, approvals=1, code_owner_review=False,
-        dismiss_stale_reviews=True, require_last_push_approval=True,
+        required=True,
+        approvals=1,
+        code_owner_review=False,
+        dismiss_stale_reviews=True,
+        require_last_push_approval=True,
     )
     rule = pull_requests.to_ruleset_rule(policy)
     assert rule["parameters"]["dismiss_stale_reviews_on_push"] is True

@@ -37,9 +37,14 @@ def diff_flat_settings(current_repo: dict, desired: RepoSettingsPolicy) -> list[
             continue  # not declared -- managed-scope: don't touch
         current_value = bool(current_repo.get(field_name, False))
         if current_value != desired_value:
-            changes.append(RepoSettingChange(
-                field_name, current_value, desired_value, _classify(current_value, desired_value)
-            ))
+            changes.append(
+                RepoSettingChange(
+                    field_name,
+                    current_value,
+                    desired_value,
+                    _classify(current_value, desired_value),
+                )
+            )
     return changes
 
 
@@ -47,7 +52,9 @@ def to_flat_settings_payload(changes: list[RepoSettingChange]) -> dict:
     return {change.field: change.desired_value for change in changes}
 
 
-def diff_security_and_analysis(current_repo: dict, desired: RepoSettingsPolicy) -> list[RepoSettingChange]:
+def diff_security_and_analysis(
+    current_repo: dict, desired: RepoSettingsPolicy
+) -> list[RepoSettingChange]:
     """secret_scanning / secret_scanning_push_protection -- nested under
     security_and_analysis.<field>.status ("enabled"/"disabled") on the repo GET response. Absence
     (the whole block, or one sub-key) is treated as 'disabled' for diff purposes, matching GitHub's
@@ -62,9 +69,14 @@ def diff_security_and_analysis(current_repo: dict, desired: RepoSettingsPolicy) 
         current_status = (security.get(field_name) or {}).get("status")
         current_value = current_status == "enabled"
         if current_value != desired_value:
-            changes.append(RepoSettingChange(
-                field_name, current_value, desired_value, _classify(current_value, desired_value)
-            ))
+            changes.append(
+                RepoSettingChange(
+                    field_name,
+                    current_value,
+                    desired_value,
+                    _classify(current_value, desired_value),
+                )
+            )
     return changes
 
 
@@ -86,4 +98,8 @@ def diff_toggle(
         return []
     if current_value == desired_value:
         return []
-    return [RepoSettingChange(field_name, current_value, desired_value, _classify(current_value, desired_value))]
+    return [
+        RepoSettingChange(
+            field_name, current_value, desired_value, _classify(current_value, desired_value)
+        )
+    ]

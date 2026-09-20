@@ -46,7 +46,9 @@ def audit_all(client: GitHubClient, config: PolicyConfig) -> tuple[list[AuditRes
     for branch in config.branches:
         changes, _resolved = plan_branch(client, config, branch, rulesets_cache=rulesets_cache)
         results.append(
-            AuditResult(branch=branch, changes=changes, stale_branch_protection=branch in stale_branches)
+            AuditResult(
+                branch=branch, changes=changes, stale_branch_protection=branch in stale_branches
+            )
         )
     orphaned_rulesets = detect_orphaned_rulesets(client, config, rulesets_cache=rulesets_cache)
     return results, orphaned_rulesets

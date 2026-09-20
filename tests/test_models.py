@@ -109,7 +109,9 @@ def test_branch_policy_rejects_allow_fork_syncing_true_with_lock_branch_false():
 
 
 def test_branch_policy_allows_allow_fork_syncing_true_with_lock_branch_true():
-    policy = BranchPolicy(enforcement="branch_protection", allow_fork_syncing=True, lock_branch=True)
+    policy = BranchPolicy(
+        enforcement="branch_protection", allow_fork_syncing=True, lock_branch=True
+    )
     assert policy.allow_fork_syncing is True
     assert policy.lock_branch is True
 
@@ -167,7 +169,8 @@ def test_policy_config_repo_settings_defaults_to_none():
 
 def test_policy_config_parses_repo_settings():
     config = PolicyConfig(
-        version=1, branches={},
+        version=1,
+        branches={},
         repo_settings=RepoSettingsPolicy(delete_branch_on_merge=True, allow_update_branch=False),
     )
     assert config.repo_settings.delete_branch_on_merge is True
@@ -223,8 +226,11 @@ def test_ruleset_unsupported_fields_derived_from_field_specs():
     expected = {spec.name: spec.default for spec in FIELD_SPECS if not spec.ruleset_supported}
     assert _RULESET_UNSUPPORTED_FIELDS == expected
     assert set(_RULESET_UNSUPPORTED_FIELDS) == {
-        "enforce_admins", "required_conversation_resolution", "lock_branch",
-        "allow_fork_syncing", "clear_restrictions",
+        "enforce_admins",
+        "required_conversation_resolution",
+        "lock_branch",
+        "allow_fork_syncing",
+        "clear_restrictions",
     }
 
 
