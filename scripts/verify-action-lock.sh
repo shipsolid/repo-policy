@@ -53,6 +53,14 @@ echo "verify-action-lock: regenerating the lock in a temporary path and comparin
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
+# Seed the temp output with the checked-in lock *before* compiling into it: `uv pip compile`
+# treats a pre-existing output file at -o as a preference source and keeps every still-valid pin
+# as-is. Compiling into a virgin path instead makes uv re-resolve every loosely-constrained
+# package (including unconstrained ones like hatchling) to whatever is newest on PyPI right now --
+# which would fail this check on any unrelated upstream release, with nothing in this repo having
+# changed. Seeding preserves real drift detection (a genuine .in/pyproject.toml change still
+# produces a diff) while eliminating that false positive.
+cp requirements-action.txt "$tmp_dir/requirements-action.txt"
 uv pip compile --generate-hashes --python-version 3.12 \
     -o "$tmp_dir/requirements-action.txt" requirements-action.in >/dev/null
 

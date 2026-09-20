@@ -199,11 +199,14 @@ jobs:
             aquasec/trivy:0.74.0 image --exit-code 1 --severity CRITICAL --ignore-unfixed \
             repo-policy-action:build1
 
-      - name: Report high-severity vulnerabilities for review (non-blocking)
+      - name: Report critical and high-severity vulnerabilities for review (non-blocking)
+        # Deliberately no --ignore-unfixed here, unlike the blocking step above: an unfixed
+        # CRITICAL is never blocking (there's nothing actionable to require), but it still needs
+        # to be visible to a human reviewer somewhere -- this is that somewhere.
         if: always()
         run: |
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasec/trivy:0.74.0 image --exit-code 0 --severity HIGH \
+            aquasec/trivy:0.74.0 image --exit-code 0 --severity CRITICAL,HIGH \
             repo-policy-action:build1
 
   required:
