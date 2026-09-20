@@ -86,13 +86,15 @@ Single `main` branch. No release branches; every release is cut directly from `m
 7. The built sdist/wheel are handed off (via `actions/upload-artifact` / `download-artifact`) to a
    separate `publish` job, and published to PyPI via trusted publishing (OIDC) — no long-lived API
    token stored in the repo.
-8. In parallel with `publish`, a separate `provenance` job (Task 8) re-checks out the exact
-   released commit (by tag, since `release`'s own push moved `main` past `github.sha`), generates
-   a CycloneDX SBOM for the wheel's install environment and one for the Docker Action image
-   (built fresh from the release commit's `Dockerfile`), signs GitHub artifact attestations
-   (Sigstore-backed build provenance) for the wheel, sdist, both SBOMs, and the Docker image (by
-   digest), and attaches the two SBOM files to the GitHub release `release`'s own
-   python-semantic-release step already created. See "SBOM and provenance (`provenance` job)"
+8. In parallel with `publish`, two more jobs (Task 8) handle SBOM and provenance: `sbom`
+   re-checks out the exact released commit (by tag, since `release`'s own push moved `main` past
+   `github.sha`), generates a CycloneDX SBOM for the wheel's install environment and one for the
+   Docker Action image (built fresh from the release commit's `Dockerfile`), and signs GitHub
+   artifact attestations (Sigstore-backed build provenance) for the wheel, sdist, both SBOMs, and
+   the Docker image (by digest); `release-assets` then attaches the two SBOM files to the GitHub
+   release `release`'s own python-semantic-release step already created. Split into two jobs
+   rather than one so no single job ever holds both `contents: write` (needed to attach release
+   assets) and `id-token: write` (needed to mint attestations) at once — see "SBOM and provenance"
    below and `SECURITY.md`'s "Verifying release artifacts" for how to check these.
 
 ### Permission scoping and concurrency
@@ -104,7 +106,8 @@ Each job in `release.yml` carries only the permission its own steps need:
 | `ci` | `contents: read` | Only checks out code to lint/type-check/test/build. |
 | `release` | `contents: write` | Pushes the semantic-release commit and moves the floating tag. |
 | `publish` | `id-token: write` | OIDC trusted publishing only — never checks out the repo, never sees `contents: write`. |
-| `provenance` | `contents: write`, `id-token: write`, `attestations: write` | Attaches SBOMs to the GitHub release (`contents: write`) and signs Sigstore-backed attestations (`id-token: write` + `attestations: write`) — a distinct permission combination from both `release` and `publish`, so it's a third job rather than added to either. |
+| `sbom` | `contents: read`, `id-token: write`, `attestations: write` | Generates SBOMs and signs Sigstore-backed attestations. Its own steps (installing a PyPI package, `docker build`, `pip install` a built wheel) aren't narrow enough to also trust with `contents: write` in the same job — see "SBOM and provenance" below for why that matters concretely (PyPI trusted publishing matches on repository + workflow filename). |
+| `release-assets` | `contents: write` only | Attaches the SBOMs `sbom` produced to the GitHub release. Never checks out the repo and never holds `id-token: write` — mirrors the `release`/`publish` split for the same reason. |
 
 The workflow-level default is `permissions: {}`; nothing falls back to the repository's broader
 default token permissions.
@@ -149,42 +152,56 @@ publishing has to be pre-registered on PyPI before the first attempt, it isn't p
 never published to PyPI, and — since PyPI never allows re-uploading a consumed version number —
 never will be; `pip install repo-policy` starts at `0.1.3`. `v0.1.3` onward publish cleanly.
 
-## SBOM and provenance (`provenance` job)
+## SBOM and provenance (`sbom` and `release-assets` jobs)
 
 Added in Task 8, alongside `pip-audit`/CodeQL/`security.yml` — see "Security workflow" below for
 those; this section is specifically about what happens per-release.
 
-The `provenance` job (see the permission-scoping table above) runs after `release` succeeds, in
-parallel with `publish`:
+Two jobs run after `release` succeeds, in parallel with `publish` — split the same way
+`release`/`publish` are split (see the permission-scoping table above), and for the same reason:
+neither job may hold `contents: write` and `id-token: write` at the same time. `sbom`'s own steps
+(installing `cyclonedx-bom` from PyPI, `docker build` from the release commit, `docker run`, `pip
+install` the built wheel) aren't narrow enough to trust with repo-write *and* the ability to mint
+an OIDC token in the same job — PyPI trusted publishing matches on repository + workflow filename,
+and both live in `release.yml` alongside `publish`, so a compromised step here holding both
+capabilities could mint a `pypi`-audience token and publish an arbitrary release. So:
 
-1. Checks out the exact released commit by tag (`needs.release.outputs.tag`) — not `github.sha`,
-   which by this point in the workflow run points at that commit's *parent* (`release`'s own
-   version-bump commit already moved `main` forward).
-2. Downloads the `dist/` artifact `release` uploaded (the built wheel + sdist).
-3. Installs the wheel into a throwaway venv and runs `cyclonedx-py environment` against it —
-   `sbom-wheel.cdx.json`, describing exactly what `pip install repo-policy` puts on disk, not just
-   the declared dependency ranges.
-4. Builds the Docker Action image fresh from the release commit's `Dockerfile` (a single build —
-   `ci.yml`'s own `docker` job already proved two-build reproducibility for this exact commit,
-   gated by `needs: ci`), extracts its installed-package list (`pip list --format=freeze`, the
-   same approach `ci.yml`'s `docker` job uses for its own inventory step), and runs `cyclonedx-py
-   requirements` against it — `sbom-docker.cdx.json`.
-5. Runs `actions/attest-build-provenance` twice: once (`subject-path`) covering the wheel, sdist,
-   and both SBOM files together, and once more (`subject-name` + `subject-digest`) for the Docker
-   image, since a file-based and a digest-based subject can't share one call.
-6. Uploads both SBOM files to the GitHub release as assets (`gh release upload`) — the release
-   object itself already exists by this point, created by `release`'s own
-   python-semantic-release step (which creates the VCS release but does not upload `dist/`
-   assets to it; PyPI, via the separate `publish` job, remains the actual package-install source).
+1. **`sbom`** (`contents: read`, `id-token: write`, `attestations: write`) — checks out the exact
+   released commit by tag (`needs.release.outputs.tag`), not `github.sha` (which by this point
+   points at that commit's *parent* — `release`'s own version-bump commit already moved `main`
+   forward); downloads the `dist/` artifact `release` uploaded; installs the wheel into a
+   throwaway venv and runs `cyclonedx-py environment` against it (`sbom-wheel.cdx.json`); builds
+   the Docker Action image fresh from the release commit's `Dockerfile` (a single build — see the
+   digest-reproducibility caveat below for why this isn't the same guarantee as `ci.yml`'s
+   two-build check), extracts its installed-package list (`pip list --format=freeze`) and runs
+   `cyclonedx-py requirements` against it (`sbom-docker.cdx.json`); runs
+   `actions/attest-build-provenance` twice — once (`subject-path`) covering the wheel, sdist, and
+   both SBOM files together, once more (`subject-name` + `subject-digest`) for the Docker image,
+   since a file-based and a digest-based subject can't share one call; uploads both SBOM files as
+   a workflow artifact (the same `upload-artifact`/`download-artifact` handoff `release` uses to
+   pass `dist/` to `publish`).
+2. **`release-assets`** (`contents: write` only, no checkout) — downloads the SBOM artifact and
+   runs `gh release upload` to attach both files to the GitHub release that `release`'s own
+   python-semantic-release step already created (that step creates the VCS release but does not
+   upload `dist/` to it; PyPI, via the separate `publish` job, remains the actual package-install
+   source).
 
-**Why the Docker image is attested by digest, not by registry reference:** this repository never
-pushes the Docker Action image to a registry — `action.yml` builds it fresh from the pinned
-`Dockerfile` at consumption time (see Task 7). The attestation therefore records the digest of the
-image `provenance` itself built from the release commit, not a `ghcr.io`/Docker Hub tag. Anyone
-who wants to independently verify it has to rebuild at the same tag and compare digests, relying
-on Task 7's reproducibility guarantee (digest-pinned base image + hash-locked dependencies) rather
-than on registry-hosted immutability. See `SECURITY.md`'s "Verifying release artifacts" for the
-exact `gh attestation verify` commands.
+**Why the Docker image is attested by digest, not by registry reference — and what that digest
+does and doesn't prove:** this repository never pushes the Docker Action image to a registry —
+`action.yml` builds it fresh from the pinned `Dockerfile` at consumption time (see Task 7). The
+attestation therefore records the digest of the image `sbom` itself built from the release commit,
+not a `ghcr.io`/Docker Hub tag.
+
+**This digest is not reproducible across independent builds** — confirmed by building the same
+commit twice with `docker build --no-cache` and comparing `docker inspect --format='{{.Id}}'`
+output: the two builds produced different image IDs, with different layer digests on every layer
+that touches `src/`, `requirements-action.txt`, or either `pip install` step (only the digest-pinned
+base-image layers matched). `ci.yml`'s `docker` job never claimed otherwise: it diffs **package and
+OS inventories** (`pip list --format=freeze`, `dpkg -l`) between its own two clean builds, not image
+digests — that check establishes "the same packages, at the same versions, every time," not
+"byte-identical image layers." See `SECURITY.md`'s "Verifying release artifacts" for what *is*
+verifiable today (the attestation as an audit record, plus SBOM-component comparison) and the exact
+commands.
 
 **Cyclonedx tool note:** the PyPI package is `cyclonedx-bom`; the CLI it installs is `cyclonedx-py`
 — a package/command name mismatch worth knowing about when reading the workflow's `pip install

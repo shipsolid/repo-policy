@@ -42,7 +42,7 @@ jobs:
       contents: write # semantic-release commits the version bump/changelog and pushes the tag
     outputs:
       released: ${{ steps.release.outputs.released }}
-      tag: ${{ steps.release.outputs.tag }} # consumed by the `provenance` job below to checkout/tag/upload against the exact released commit
+      tag: ${{ steps.release.outputs.tag }} # consumed by the `sbom` and `release-assets` jobs below to checkout/tag/upload against the exact released commit
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -126,22 +126,23 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1 (currently v1.14.2)
 
-  provenance:
-    name: provenance
-    # Split from both `release` (contents: write, to push the version-bump commit/tag) and
-    # `publish` (id-token: write only, for PyPI OIDC -- never checks out the repo, never sees
-    # contents: write) for the same reason those two are split from each other: this job's own
-    # narrow job -- generate CycloneDX SBOMs for what `release` just built, sign build-provenance
-    # attestations for them, and attach the SBOMs to the GitHub release `release`'s own
-    # python-semantic-release step already created -- needs a permission combination (contents:
-    # write *and* id-token: write *and* attestations: write) that neither existing job should
-    # carry on top of what it already has. Runs in parallel with `publish`; PyPI's own outcome
-    # doesn't gate whether the release's build provenance gets recorded.
+  sbom:
+    name: sbom
+    # Split from `release-assets` below for exactly the reason `release`/`publish` are split from
+    # each other (see `publish`'s own comment): this job's steps -- installing cyclonedx-bom from
+    # PyPI, `docker build` from the release commit, `docker run`, `pip install dist/*.whl` -- are
+    # not narrow, so it must never hold `contents: write` at the same time as `id-token: write`.
+    # PyPI trusted publishing matches on repository + *workflow filename*, and this job lives in
+    # the same file as `publish`; a compromised step here holding both repo-write and OIDC would
+    # be able to mint a pypi-audience token and publish an arbitrary release -- exactly the
+    # capability `release`/`publish`'s split exists to confine away from any contents: write job.
+    # So: id-token: write + attestations: write here, contents: write only in `release-assets`,
+    # never both in one job.
     needs: release
     if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write # gh release upload, to attach the SBOMs to the GitHub release
+      contents: read # checkout only
       id-token: write # actions/attest-build-provenance: Sigstore OIDC signing
       attestations: write # actions/attest-build-provenance: write the attestation to this repo's attestation store
     steps:
@@ -207,9 +208,8 @@ jobs:
       # pinned Dockerfile at consumption time -- see Task 7); subject-path (file-based) and
       # subject-digest (this case) are mutually exclusive inputs, so the image is attested in its
       # own call, by the digest of the image this job just built from the release commit's
-      # Dockerfile. Task 7's reproducibility guarantee (digest-pinned base image + hash-locked
-      # deps) is what makes that digest independently reproducible/verifiable by anyone rebuilding
-      # at the same tag, despite never being pushed anywhere.
+      # Dockerfile. See SECURITY.md's "Verifying release artifacts" for what this attestation
+      # does and doesn't currently let a consumer independently re-derive.
       - name: Attest the Docker Action image
         env:
           IMAGE_REF: repo-policy-action:${{ needs.release.outputs.tag }}
@@ -222,8 +222,39 @@ jobs:
           subject-name: repo-policy-action
           subject-digest: ${{ env.IMAGE_DIGEST }}
 
+      # Hands the two SBOM files to `release-assets` (contents: write, but no id-token: write) the
+      # same way `release` hands `dist/` to `publish` -- a workflow artifact, not a shared
+      # checkout, so no single job ever holds both repo-write and OIDC-mint capability.
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sboms
+          path: |
+            sbom-wheel.cdx.json
+            sbom-docker.cdx.json
+          retention-days: 1
+          if-no-files-found: error
+
+  release-assets:
+    name: release-assets
+    # Split from `sbom` above so this job -- which does nothing but attach already-generated,
+    # already-attested files to the GitHub release -- can carry contents: write without ever also
+    # holding id-token: write in the same job. Never checks out the repository (nothing here needs
+    # the source tree, only the downloaded SBOM files and the release tag).
+    needs: [release, sbom]
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release upload, to attach the SBOMs to the GitHub release
+    steps:
+      - name: Download SBOMs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sboms
+
       - name: Attach SBOMs to the GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }} # no checkout in this job, so `gh` can't infer the repo from a git remote -- must be told explicitly
           RELEASE_TAG: ${{ needs.release.outputs.tag }}
         run: gh release upload "$RELEASE_TAG" sbom-wheel.cdx.json sbom-docker.cdx.json --clobber

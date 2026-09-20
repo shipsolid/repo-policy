@@ -101,11 +101,14 @@ contractual SLA:
 
 ### Verifying release artifacts
 
-Every release (`v0.1.4` onward) publishes, alongside the PyPI package: a CycloneDX SBOM for the
-wheel's install environment and one for the Docker Action image (both attached to the GitHub
-release), plus GitHub artifact attestations (Sigstore-backed build provenance) for the wheel,
-sdist, both SBOMs, and the Docker Action image (by digest). To verify a downloaded artifact's
-provenance:
+Starting with the first release cut after this SBOM/attestation tooling merged (check
+`CHANGELOG.md` for the earliest entry mentioning SBOMs, or look for a release whose assets include
+`sbom-wheel.cdx.json`/`sbom-docker.cdx.json` — as of this writing that tooling has not yet shipped
+in a release; the current in-development version is `0.4.7`), every release publishes, alongside
+the PyPI package: a CycloneDX SBOM for the wheel's install environment and one for the Docker
+Action image (both attached to the GitHub release), plus GitHub artifact attestations
+(Sigstore-backed build provenance) for the wheel, sdist, both SBOMs, and the Docker Action image
+(by digest). To verify a downloaded artifact's provenance:
 
 ```bash
 # Verify the wheel/sdist/SBOM attestations (requires the GitHub CLI, `gh`, and repo read access)
@@ -122,21 +125,43 @@ CycloneDX-compliant tool, e.g. `cyclonedx-py`'s own `--validate` (on by default)
 sbom-wheel.cdx.json`.
 
 **Known limitation -- the Docker Action image's attestation cannot currently be verified with a
-single command.** `gh attestation verify` requires either a local file path or a
-registry-resolvable `oci://` reference to recompute the subject's digest and compare it against
-the signed record (confirmed against `gh`'s own documentation). This repository never pushes the
-Docker Action image to a registry -- `action.yml` builds it fresh from the pinned `Dockerfile` at
-consumption time (see Task 7) -- so there is no `oci://` reference to verify against, and a
-`docker save` tarball's own hash doesn't match the registry-style image digest the attestation was
-signed for. The attestation is still real and auditable (visible under the repository's
-Attestations tab on GitHub, and fetchable directly by digest via `GET
-/repos/shipsolid/repo-policy/attestations/<digest>`), but turning it into a one-command local
-verification would require either publishing the image to a registry (`ghcr.io` or Docker Hub) as
-a future enhancement, or standing up a local registry to give the rebuilt image a resolvable
-`oci://` reference. Until then, trust in a specific release's image rests on Task 7's
-reproducibility guarantee (digest-pinned base image + hash-locked dependencies): rebuild from the
-same tag's `Dockerfile` and compare `docker inspect --format='{{.Id}}'` output against the digest
-recorded in the workflow run's logs / the attestation itself.
+single command, and its digest is not reproducible across rebuilds.** `gh attestation verify`
+requires either a local file path or a registry-resolvable `oci://` reference to recompute the
+subject's digest and compare it against the signed record (confirmed against `gh`'s own
+documentation). This repository never pushes the Docker Action image to a registry -- `action.yml`
+builds it fresh from the pinned `Dockerfile` at consumption time (see Task 7) -- so there is no
+`oci://` reference to verify against.
+
+It's also not enough to just rebuild locally and compare digests: **the image's digest is not
+reproducible across independent builds**, confirmed by building this exact commit twice
+(`docker build --no-cache`) and comparing `docker inspect --format='{{.Id}}'` output -- the two
+builds produced different image IDs, with different `RootFS.Layers` digests on every layer that
+touches `src/`, `requirements-action.txt`, or either `pip install` step. Only the base-image layers
+(digest-pinned in the `Dockerfile`) matched. This is consistent with what Task 7's own CI check
+(`ci.yml`'s `docker` job) actually verifies: it diffs **package and OS inventories** (`pip list
+--format=freeze`, `dpkg -l`) between two clean builds, not image digests -- Task 7 established
+"the same packages, at the same versions, every time," not "byte-identical image layers." Treating
+the two as equivalent (an earlier draft of this document did) is wrong and would send anyone who
+tried to verify a release's image digest straight into a false "tampering" conclusion.
+
+What you *can* verify for a specific release's Docker image, without trusting anything blindly:
+
+1. **The attestation is a real, auditable record.** It's visible under the repository's
+   Attestations tab on GitHub, and fetchable directly by digest via `GET
+   /repos/shipsolid/repo-policy/attestations/<digest>` -- it proves *some* GitHub Actions run in
+   this repository, at this commit, produced an image with that exact digest, signed via Sigstore.
+   Treat it as an audit trail, not as something you locally re-derive.
+2. **The SBOM's component list is reproducible even though the image digest isn't.** Rebuild the
+   image from the same release tag's `Dockerfile`, extract its package list (`docker run --rm
+   --entrypoint pip <image> list --format=freeze`), and diff it against the release's
+   `sbom-docker.cdx.json` components -- the *packages and versions* installed are pinned by
+   `requirements-action.txt`'s hashes and are what should match, not the image digest.
+3. Turning digest-level verification into a real one-command check would require either making the
+   build byte-for-byte reproducible (e.g. `SOURCE_DATE_EPOCH` pinned to the commit timestamp plus
+   auditing every remaining source of build-time nondeterminism, then proving it with repeated
+   `--no-cache` builds) or publishing the image to a registry (`ghcr.io`/Docker Hub) so `gh
+   attestation verify oci://...` has something to resolve against. Both are real scope beyond this
+   SBOM/attestation-plumbing task and are open follow-up items, not done here.
 
 ## Security Baseline
 
