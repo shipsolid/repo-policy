@@ -300,3 +300,12 @@ class GitHubClient:
 
     def delete_ruleset(self, ruleset_id: int) -> None:
         self._request("DELETE", f"/repos/{self.owner}/{self.repo}/rulesets/{ruleset_id}")
+
+    def get_rules_for_branch(self, branch: str) -> list[dict]:
+        """GitHub's authoritative, already-evaluated view of every active rule for this branch --
+        across repository AND organization rulesets, with disabled/evaluate-enforcement rulesets
+        already excluded. Each entry carries a `ruleset_id`, which apply.py cross-checks against a
+        managed ruleset's own id to verify it's actually contributing here, not just correctly
+        shaped on paper."""
+        response = self._request("GET", f"/repos/{self.owner}/{self.repo}/rules/branches/{branch}")
+        return _parse_json(_expect_response(response))

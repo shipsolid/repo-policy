@@ -249,6 +249,70 @@ def test_permissive_branch_policy_ruleset_defaults_signed_commits_false():
     assert policy.signed_commits is False
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"version": 1, "branches": {}, "strcit": True},
+        {"version": 1, "branches": {"main": {"enforce_admin": True}}},
+        {"version": 1, "branches": {"main": {"pull_requests": {"approval": 2}}}},
+        {"version": 1, "branches": {}, "repo_settings": {"secret_scaning": True}},
+    ],
+)
+def test_policy_rejects_unknown_fields(payload):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        PolicyConfig.model_validate(payload)
+
+
+def test_status_checks_policy_rejects_non_strict_required_type():
+    with pytest.raises(ValidationError):
+        StatusChecksPolicy.model_validate({"required": "no"})
+
+
+def test_pull_request_policy_rejects_bool_for_approvals():
+    with pytest.raises(ValidationError):
+        PullRequestPolicy.model_validate({"approvals": True})
+
+
+def test_pull_request_policy_rejects_negative_approvals():
+    with pytest.raises(ValidationError):
+        PullRequestPolicy.model_validate({"approvals": -1})
+
+
+def test_pull_request_policy_rejects_approvals_above_github_max():
+    with pytest.raises(ValidationError):
+        PullRequestPolicy.model_validate({"approvals": 7})
+
+
+def test_pull_request_policy_allows_approvals_at_github_max():
+    policy = PullRequestPolicy.model_validate({"approvals": 6})
+    assert policy.approvals == 6
+
+
+def test_policy_config_rejects_bool_for_version():
+    with pytest.raises(ValidationError):
+        PolicyConfig.model_validate({"version": True, "branches": {}})
+
+
+def test_policy_config_rejects_non_strict_strict_field():
+    with pytest.raises(ValidationError):
+        PolicyConfig.model_validate({"version": 1, "branches": {}, "strict": 1})
+
+
+def test_status_checks_policy_rejects_blank_required_entry():
+    with pytest.raises(ValidationError, match="blank"):
+        StatusChecksPolicy(required=["build", ""])
+
+
+def test_status_checks_policy_rejects_whitespace_only_required_entry():
+    with pytest.raises(ValidationError, match="blank"):
+        StatusChecksPolicy(required=["build", "   "])
+
+
+def test_status_checks_policy_rejects_duplicate_required_entries():
+    with pytest.raises(ValidationError, match="duplicate"):
+        StatusChecksPolicy(required=["build", "build"])
+
+
 def test_permissive_branch_policy_robust_to_a_future_field_spec_named_enforcement(monkeypatch):
     """permissive_branch_policy() only excluded "signed_commits" from its FIELD_SPECS-derived
     kwargs by name, before splatting the rest into BranchPolicy(...) alongside the explicit

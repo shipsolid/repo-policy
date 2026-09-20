@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock
 
+import pytest
+
 from repo_policy.audit import audit_all, detect_orphaned_rulesets
 from repo_policy.models import BranchPolicy, PolicyConfig, PullRequestPolicy
 
@@ -46,6 +48,70 @@ def test_audit_all_flags_stale_branch_protection_and_treats_it_as_non_compliant(
     results, _orphaned_rulesets = audit_all(client, config)
     assert results[0].stale_branch_protection is True
     assert results[0].compliant is False
+
+
+def _canonical_ruleset_raw(*, rules: list[dict] | None = None, **overrides) -> dict:
+    raw = {
+        "id": 7,
+        "name": "repo-policy:main",
+        "target": "branch",
+        "enforcement": "active",
+        "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+        "rules": rules if rules is not None else [{"type": "required_linear_history"}],
+        "bypass_actors": [],
+    }
+    raw.update(overrides)
+    return raw
+
+
+@pytest.mark.parametrize(
+    "raw_patch",
+    [
+        {"enforcement": "disabled"},
+        {"enforcement": "evaluate"},
+        {"target": "tag"},
+        {"conditions": {"ref_name": {"include": [], "exclude": []}}},
+        {"bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]},
+    ],
+)
+def test_audit_all_reports_noncompliant_for_every_ineffective_ruleset_variant(raw_patch):
+    """Acceptance criterion: audit must report drift (non-compliant) for every ruleset-
+    applicability variant the plan closes -- disabled/evaluate enforcement, wrong target, a
+    missing/excluded branch condition, and a bypass actor."""
+    client = MagicMock()
+    client.find_ruleset_by_name.return_value = _canonical_ruleset_raw() | raw_patch
+    config = PolicyConfig(
+        version=1, branches={"main": BranchPolicy(enforcement="ruleset", linear_history=True)}
+    )
+    results, _orphaned_rulesets = audit_all(client, config)
+    assert results[0].compliant is False
+
+
+def test_audit_all_reports_noncompliant_when_ruleset_contributes_no_active_rule():
+    """Metadata and rule content are both canonical, but GitHub's effective-rules endpoint says
+    the ruleset isn't actually active on the branch -- audit must not report compliance."""
+    client = MagicMock()
+    client.find_ruleset_by_name.return_value = _canonical_ruleset_raw()
+    client.get_rules_for_branch.return_value = []
+    config = PolicyConfig(
+        version=1, branches={"main": BranchPolicy(enforcement="ruleset", linear_history=True)}
+    )
+    results, _orphaned_rulesets = audit_all(client, config)
+    assert results[0].compliant is False
+
+
+def test_audit_all_reports_compliant_for_a_genuinely_effective_canonical_ruleset():
+    client = MagicMock()
+    client.get_branch_protection.return_value = None
+    client.find_ruleset_by_name.return_value = _canonical_ruleset_raw()
+    client.get_rules_for_branch.return_value = [
+        {"type": "required_linear_history", "ruleset_id": 7, "ruleset_source_type": "Repository"}
+    ]
+    config = PolicyConfig(
+        version=1, branches={"main": BranchPolicy(enforcement="ruleset", linear_history=True)}
+    )
+    results, _orphaned_rulesets = audit_all(client, config)
+    assert results[0].compliant is True
 
 
 def test_audit_all_fetches_ruleset_list_at_most_once_for_multiple_ruleset_branches():

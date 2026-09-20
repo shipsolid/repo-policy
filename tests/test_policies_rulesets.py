@@ -1,11 +1,59 @@
 import pytest
 
+from repo_policy.diff import PolicyResolutionError
 from repo_policy.models import BranchPolicy, PullRequestPolicy, StatusChecksPolicy
 from repo_policy.policies import rulesets
 
 
+def compliant_ruleset(branch: str, *, rules: list[dict] | None = None) -> dict:
+    """A ruleset GET payload already in the canonical, always-active, exactly-scoped, no-bypass
+    shape `to_api_payload()` builds -- the baseline `test_metadata_changes_rejects_ineffective_
+    ruleset` patches away from, one owned-metadata field at a time."""
+    return {
+        "id": 7,
+        "name": rulesets.ruleset_name(branch),
+        "target": "branch",
+        "enforcement": "active",
+        "conditions": {"ref_name": {"include": [f"refs/heads/{branch}"], "exclude": []}},
+        "rules": rules if rules is not None else [],
+        "bypass_actors": [],
+    }
+
+
 def test_ruleset_name_is_deterministic():
     assert rulesets.ruleset_name("main") == "repo-policy:main"
+
+
+def test_metadata_changes_none_when_ruleset_does_not_exist_yet():
+    """data is None -- the ruleset hasn't been created yet, an "add" already handled by the
+    existing creation flow in apply.py, so there's nothing to diff here."""
+    assert rulesets.metadata_changes("main", None) == []
+
+
+def test_metadata_changes_empty_for_an_already_canonical_ruleset():
+    assert rulesets.metadata_changes("main", compliant_ruleset("main")) == []
+
+
+@pytest.mark.parametrize(
+    ("patch", "field"),
+    [
+        ({"enforcement": "disabled"}, "ruleset_enforcement"),
+        ({"enforcement": "evaluate"}, "ruleset_enforcement"),
+        ({"target": "tag"}, "ruleset_target"),
+        ({"conditions": {"ref_name": {"include": [], "exclude": []}}}, "ruleset_conditions"),
+        (
+            {"conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": ["refs/heads/main"]}}},
+            "ruleset_conditions",
+        ),
+        (
+            {"bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]},
+            "ruleset_bypass_actors",
+        ),
+    ],
+)
+def test_metadata_changes_rejects_ineffective_ruleset(patch, field):
+    raw = compliant_ruleset("main") | patch
+    assert field in {change.field for change in rulesets.metadata_changes("main", raw)}
 
 
 def test_from_api_hardcodes_enforce_admins_false():
@@ -59,6 +107,27 @@ def test_from_api_reads_rules_array():
     assert result.allow_deletion is True
 
 
+def test_from_api_wraps_validation_error_as_policy_resolution_error():
+    """PullRequestPolicy.approvals is now constrained to GitHub's actual 0..6 range (models.py) --
+    if a live ruleset's pull_request rule ever has required_approving_review_count outside that
+    range (a direct API write, a future GitHub product change, or a value repo-policy itself wrote
+    before this constraint existed), from_api's direct BranchPolicy(...) construction would
+    otherwise raise a raw pydantic ValidationError that nothing above cli.py catches, crashing
+    with Python's default exit code 1 (colliding with EXIT_DRIFT) instead of a clean,
+    already-handled PolicyResolutionError -- the same failure mode branch_protection.from_api's
+    own test_from_api_wraps_validation_error_as_policy_resolution_error guards against."""
+    data = {
+        "rules": [
+            {
+                "type": "pull_request",
+                "parameters": {"required_approving_review_count": 7, "require_code_owner_review": False},
+            }
+        ]
+    }
+    with pytest.raises(PolicyResolutionError):
+        rulesets.from_api(data)
+
+
 def test_to_api_payload_builds_ruleset_targeting_branch():
     resolved = BranchPolicy(
         pull_requests=PullRequestPolicy(required=True, approvals=2, code_owner_review=True),
@@ -103,16 +172,17 @@ def test_to_api_payload_raises_explicit_error_when_pull_requests_unresolved():
         rulesets.to_api_payload("main", unresolved)
 
 
-def test_to_api_payload_preserves_current_enforcement_mode():
-    """enforcement (active/evaluate/disabled) has no modeled field -- a human-set "evaluate"
-    (dry-run) ruleset must not be silently flipped back to "active" by an unrelated apply."""
+def test_to_api_payload_forces_active_enforcement_even_when_current_is_evaluate():
+    """enforcement (active/evaluate/disabled) is owned metadata (ADR 0004) -- a ruleset dry-run-ed
+    to "evaluate" (or turned off entirely via "disabled") is exactly the false-compliance case
+    Task 1 closes, so an unrelated apply must always flip it back to "active", never preserve it."""
     resolved = BranchPolicy(
         pull_requests=PullRequestPolicy(required=False, approvals=0, code_owner_review=False),
         linear_history=True,
     )
     current_raw = {"id": 7, "enforcement": "evaluate", "rules": []}
     payload = rulesets.to_api_payload("main", resolved, current_raw=current_raw)
-    assert payload["enforcement"] == "evaluate"
+    assert payload["enforcement"] == "active"
 
 
 def test_to_api_payload_defaults_enforcement_active_on_first_creation():
@@ -123,9 +193,10 @@ def test_to_api_payload_defaults_enforcement_active_on_first_creation():
     assert payload["enforcement"] == "active"
 
 
-def test_to_api_payload_preserves_current_bypass_actors():
-    """bypass_actors has no modeled field either -- must not be silently stripped by an unrelated
-    apply, since ruleset PUT/POST is a full-object replace."""
+def test_to_api_payload_strips_bypass_actors_even_when_current_has_some():
+    """bypass_actors is owned metadata (ADR 0004) -- a bypass actor is exactly the false-
+    compliance case Task 1 closes (it lets someone route around every rule below), so an unrelated
+    apply must always clear it, never preserve it."""
     resolved = BranchPolicy(
         pull_requests=PullRequestPolicy(required=False, approvals=0, code_owner_review=False),
         linear_history=True,
@@ -136,13 +207,13 @@ def test_to_api_payload_preserves_current_bypass_actors():
         "rules": [],
     }
     payload = rulesets.to_api_payload("main", resolved, current_raw=current_raw)
-    assert payload["bypass_actors"] == [{"actor_id": 1, "actor_type": "Team", "bypass_mode": "always"}]
+    assert payload["bypass_actors"] == []
 
 
-def test_to_api_payload_preserves_current_conditions_exclude():
-    """conditions.ref_name.exclude has no modeled field -- a human-added exclude pattern (e.g. to
-    carve out an automation ref) must survive a full-object replace triggered by an unrelated,
-    modeled field changing."""
+def test_to_api_payload_clears_conditions_exclude_even_when_current_has_some():
+    """conditions.ref_name.exclude is owned metadata (ADR 0004) -- an exclude pattern that covers
+    repo-policy's own branch is exactly the false-compliance case Task 1 closes, so an unrelated
+    apply must always clear it, never preserve it."""
     resolved = BranchPolicy(
         pull_requests=PullRequestPolicy(required=False, approvals=0, code_owner_review=False),
         linear_history=True,
@@ -153,13 +224,14 @@ def test_to_api_payload_preserves_current_conditions_exclude():
         "rules": [],
     }
     payload = rulesets.to_api_payload("main", resolved, current_raw=current_raw)
-    assert payload["conditions"]["ref_name"]["exclude"] == ["refs/heads/main-bot"]
+    assert payload["conditions"]["ref_name"]["exclude"] == []
     assert payload["conditions"]["ref_name"]["include"] == ["refs/heads/main"]
 
 
-def test_to_api_payload_preserves_extra_current_includes():
-    """A human may have added a second include glob alongside repo-policy's own ref -- it must
-    not be silently dropped, and repo-policy's own ref must always be present."""
+def test_to_api_payload_drops_extra_current_includes_even_when_present():
+    """conditions.ref_name.include is owned metadata (ADR 0004) -- an extra include glob widens
+    the ruleset beyond repo-policy's own branch, so an unrelated apply must always collapse it
+    back down to exactly `refs/heads/{branch}`, never preserve the extra entry."""
     resolved = BranchPolicy(
         pull_requests=PullRequestPolicy(required=False, approvals=0, code_owner_review=False),
         linear_history=True,
@@ -170,7 +242,7 @@ def test_to_api_payload_preserves_extra_current_includes():
         "rules": [],
     }
     payload = rulesets.to_api_payload("main", resolved, current_raw=current_raw)
-    assert payload["conditions"]["ref_name"]["include"] == ["refs/heads/main", "refs/heads/release/*"]
+    assert payload["conditions"]["ref_name"]["include"] == ["refs/heads/main"]
 
 
 def test_to_api_payload_defaults_conditions_on_first_creation():

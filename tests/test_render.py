@@ -61,6 +61,57 @@ def test_render_plan_shows_clear_restrictions_label():
     assert "+ Push restrictions" in output
 
 
+def test_render_plan_shows_ruleset_enforcement_label():
+    changes = [Change(field="ruleset_enforcement", current_value="disabled", desired_value="active", action="modify")]
+    output = render_plan("acme/widgets", "main", changes)
+    assert "~ Ruleset enforcement" in output
+
+
+def test_render_plan_shows_ruleset_target_label():
+    changes = [Change(field="ruleset_target", current_value="tag", desired_value="branch", action="modify")]
+    output = render_plan("acme/widgets", "main", changes)
+    assert "~ Ruleset target" in output
+
+
+def test_render_plan_shows_ruleset_conditions_label():
+    changes = [
+        Change(
+            field="ruleset_conditions",
+            current_value={"include": [], "exclude": []},
+            desired_value={"include": ["refs/heads/main"], "exclude": []},
+            action="modify",
+        )
+    ]
+    output = render_plan("acme/widgets", "main", changes)
+    assert "~ Ruleset branch scope" in output
+
+
+def test_render_plan_shows_ruleset_bypass_actors_label():
+    changes = [
+        Change(
+            field="ruleset_bypass_actors",
+            current_value=[{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}],
+            desired_value=[],
+            action="modify",
+        )
+    ]
+    output = render_plan("acme/widgets", "main", changes)
+    assert "~ Ruleset bypass actors" in output
+
+
+def test_render_plan_shows_ruleset_effectiveness_label():
+    changes = [
+        Change(
+            field="ruleset_effectiveness",
+            current_value="not contributing an active rule on this branch",
+            desired_value="active",
+            action="modify",
+        )
+    ]
+    output = render_plan("acme/widgets", "main", changes)
+    assert "~ Ruleset effective on branch" in output
+
+
 def test_render_plan_falls_back_to_raw_field_name_for_unknown_field():
     """Defensive fallback: a future BranchPolicy field added to diff._FIELDS without a matching
     _LABELS entry must render its raw name instead of raising KeyError."""
