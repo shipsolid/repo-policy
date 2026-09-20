@@ -34,12 +34,30 @@ jobs:
     permissions:
       contents: read
 
+  # Task 9 applied real branch protection to `main`: pull_requests.required + enforce_admins, and
+  # repo-policy deliberately never manages a PR-bypass allowlist for this repo (read-through, never
+  # cleared/set -- see src/repo_policy/policies/pull_requests.py). That means nothing, including
+  # this workflow, can push the version-bump commit straight to `main` anymore -- it has to land
+  # via a real, merged pull request. Tag pushes are unaffected: classic branch protection
+  # (`PUT /repos/{owner}/{repo}/branches/{branch}/protection`, what repository-policy.yml declares
+  # for `main`) is structurally scoped to `refs/heads/<branch>` only -- there is no tag-scoped
+  # equivalent in that API, and this repo's self-policy configures neither a Ruleset nor a classic
+  # tag-protection rule for `refs/tags/*`. So the release TAG is still pushed directly here, same
+  # as before Task 9; only the COMMIT needs the new PR path. See docs/ci-cd.md for the full
+  # research trail (GitHub's own docs on rebase-merge and tag protection) behind this job's design.
   release:
     name: release
     needs: ci
     runs-on: ubuntu-latest
+    # Every real release now pauses here for a human approval click, by design: the `release`
+    # GitHub Environment (create it with a required-reviewer protection rule -- see docs/ci-cd.md's
+    # "What you still need to set up on GitHub") gates this job's start, and the release-bot's PAT
+    # and SSH signing key are stored as secrets scoped to that environment, not as repository
+    # secrets -- so they are not even materialized on the runner until the approval is granted.
+    environment: release
+    timeout-minutes: 45 # bounds the PR-wait loop below against a hung/broken CI run blocking the release-main concurrency queue indefinitely
     permissions:
-      contents: write # semantic-release commits the version bump/changelog and pushes the tag
+      contents: read # nothing here writes through the default GITHUB_TOKEN -- every push/PR/merge/release-create call below authenticates as the release-bot via secrets.RELEASE_BOT_TOKEN instead
     outputs:
       released: ${{ steps.release.outputs.released }}
       tag: ${{ steps.release.outputs.tag }} # consumed by the `sbom` and `release-assets` jobs below to checkout/tag/upload against the exact released commit
@@ -47,22 +65,74 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # The release-bot's own identity, not the default token: every git push and gh call in
+          # this job needs to authenticate as shipsolid-release-bot, both because the bot -- not
+          # this workflow's ambient GITHUB_TOKEN -- is what opens/merges the release PR, and
+          # because pushes made with the default GITHUB_TOKEN never trigger new workflow runs
+          # (deliberate GitHub Actions loop protection); a PAT's pushes do, which is exactly what
+          # step "Wait for the PR's required check and squash-merge it" below depends on to get a
+          # real `CI / required` check on the PR's head commit.
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
-      - name: Python Semantic Release
+      # Compute-only: this step commits and tags LOCALLY (signed -- see the ssh_*_signing_key
+      # inputs below) but does not push and does not create a GitHub Release yet. python-semantic-
+      # release v9's `version` command (what this Action wraps -- confirmed by decoding its
+      # action.sh) exposes --push/--no-push and --vcs-release/--no-vcs-release as independent
+      # flags; splitting "compute+commit+tag" from "push+release" this way is what lets the commit
+      # go through a real PR instead of a direct push, and lets the tag get created against the
+      # commit that actually lands on `main` after that PR merges (see the tag step near the
+      # bottom of this job for why that distinction matters).
+      #
+      # github_token is a required input but genuinely unused here: with push/vcs_release both
+      # false, PSR's own code path that would consume it (`hvcs_client.remote_url(...)`, gated by
+      # `if push_changes:`) never executes -- confirmed by reading version.py. secrets.GITHUB_TOKEN
+      # (not the bot's PAT) is passed for exactly that reason: no need to expose the more powerful
+      # credential to a step that can't use it.
+      #
+      # ssh_public_signing_key/ssh_private_signing_key/git_committer_email: this Action's own
+      # action.sh, when given all three, does exactly what brief Step 3 asks for by hand (git
+      # config gpg.format ssh / user.signingKey / commit.gpgsign / tag.gpgSign) *and* writes a
+      # ~/.ssh/allowed_signers file -- which the verify-commit/verify-tag steps below need and the
+      # brief's own snippet doesn't set up. Reusing that existing, still-pinned Action for this
+      # narrower job was chosen over hand-rolling git config: less new code, and the allowed_signers
+      # file comes for free.
+      - name: Compute the version bump (commit + tag locally; do not push or create a release yet)
         id: release
         uses: python-semantic-release/python-semantic-release@21ed7fa03e4a17ac49406eff4b60d5ad050fbdc2 # v9 (currently v9.21.2)
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          push: "false"
+          vcs_release: "false"
+          git_committer_name: shipsolid-release-bot
+          git_committer_email: amitsingh007s+repopolicybot@gmail.com
+          ssh_public_signing_key: ${{ vars.RELEASE_BOT_SSH_PUBLIC_KEY }}
+          ssh_private_signing_key: ${{ secrets.RELEASE_BOT_SIGNING_KEY }}
+
+      # Signing smoke test, not the release's real verification gate (that's the tag-verify step
+      # near the bottom): confirms the SSH signing config above actually produced a valid signature
+      # before this job spends a PR-open/CI-wait/approval cycle on a commit that turns out to be
+      # unsigned. HEAD here is the local, pre-merge commit -- never pushed to `main` as-is (see the
+      # PR/merge steps below), so this is deliberately a fast-fail check, not the thing SECURITY.md
+      # or a consumer would ever point to as "the release is verified".
+      - name: Verify the local commit and tag are signed (signing smoke test)
+        if: steps.release.outputs.released == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git verify-commit HEAD
+          git verify-tag "$RELEASE_TAG"
 
       # Belt-and-suspenders check on top of the `needs: ci` gate above: if semantic-release (or a
       # compromised/misbehaving version of it) ever touched anything beyond the version bump and
-      # changelog, stop here - before the tag moves and before anything is built for PyPI.
-      - name: Validate the release commit only touched version/changelog files
+      # changelog, stop here - before this job pushes anything or spends a PR/CI/approval cycle on
+      # it. A second copy of this check runs after the merge below, re-scoped to the commit that
+      # actually lands on `main` -- this one is a cheap, early fail-fast; that one is the real gate.
+      - name: Validate the local release commit only touched version/changelog files
         if: steps.release.outputs.released == 'true'
         env:
           SOURCE_SHA: ${{ github.sha }}
@@ -83,6 +153,128 @@ jobs:
             exit 1
           fi
 
+      - name: Upload distribution artifacts
+        if: steps.release.outputs.released == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Push the version-bump branch
+        if: steps.release.outputs.released == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git push origin "HEAD:refs/heads/release-bot/${RELEASE_TAG}"
+
+      - name: Open the release pull request
+        if: steps.release.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh pr create \
+            --base main \
+            --head "release-bot/${RELEASE_TAG}" \
+            --title "chore(release): ${RELEASE_TAG}" \
+            --body "Automated version bump for ${RELEASE_TAG}, opened and merged by the release bot. See docs/ci-cd.md for how this pipeline works."
+
+      # --required filters to exactly the branch-protection-required check (`CI / required`),
+      # deliberately not every check this PR triggers -- security.yml's pip-audit/CodeQL/zizmor
+      # jobs are advisory, not PR-blocking (see docs/ci-cd.md), and waiting on them here would just
+      # slow down every release for no gate that actually exists. `timeout` bounds the wait so a
+      # genuinely broken/hung CI run fails this job loudly instead of blocking the release-main
+      # concurrency queue forever.
+      #
+      # Squash, not rebase or merge commit: linear_history: true rules out a merge commit, and only
+      # squash lets --subject override the final commit message on `main` -- required so `[skip ci]`
+      # can be added at merge time without ever being present on the PR's own head commit (see
+      # pyproject.toml's commit_message comment for why the two must differ).
+      #
+      # No --admin: this must be a real, fully-compliant merge (required check green, no bypass),
+      # not a bot-flavored version of the shortcut Task 9 was built to close off.
+      - name: Wait for the PR's required check and squash-merge it
+        if: steps.release.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          branch="release-bot/${RELEASE_TAG}"
+          # Brief pause before the first poll: gives GitHub a moment to register the PR's check
+          # suite so --required has something to watch, rather than racing a just-opened PR.
+          sleep 15
+          timeout 1800 gh pr checks "$branch" --watch --interval 15 --fail-fast --required
+          gh pr merge "$branch" --squash --delete-branch \
+            --subject "chore(release): ${RELEASE_TAG} [skip ci]" \
+            --body ""
+
+      # Re-scoped from the pre-merge check above: this is the check that actually gates whether
+      # this release proceeds to a signed tag and PyPI. GitHub's squash-merge always creates a new
+      # commit on `main` (confirmed against GitHub's own docs -- see docs/ci-cd.md), so the object
+      # that matters here is whatever actually landed on `main`, not the pre-merge local commit
+      # diffed earlier.
+      - name: Validate the merged release commit only touched version/changelog files
+        if: steps.release.outputs.released == 'true'
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          merged_sha="$(git rev-parse origin/main)"
+          allowed="pyproject.toml src/repo_policy/__init__.py CHANGELOG.md"
+          changed="$(git diff --name-only "$SOURCE_SHA" "$merged_sha")"
+          unexpected=""
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            case " $allowed " in
+              *" $file "*) ;;
+              *) unexpected="$unexpected $file" ;;
+            esac
+          done <<< "$changed"
+          if [ -n "$unexpected" ]; then
+            echo "::error::Merged release commit changed unexpected file(s):$unexpected"
+            exit 1
+          fi
+
+      # The tag, not the commit, is this pipeline's signed release artifact from here on. GitHub's
+      # squash-merge (confirmed against GitHub's own docs, see docs/ci-cd.md) always synthesizes a
+      # new commit server-side and never carries over -- or itself applies -- a signature from the
+      # release-bot's key, for any merge method. There is no way to get a client-signed, bot-
+      # attributed "Verified" commit onto `main` through a required PR merge; that's a GitHub
+      # platform constraint, not a gap in this design. An annotated, signed TAG is a separate git
+      # object from the commit it points at, so it doesn't have this problem: it is created and
+      # pushed here, directly (tags are outside branch protection's scope -- see this job's own
+      # top-level comment), against the exact commit that now actually sits on `main`, and carries
+      # its own valid signature regardless of whether that underlying commit is itself signed.
+      - name: Create, sign, and push the version tag against the merged commit
+        if: steps.release.outputs.released == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          merged_sha="$(git rev-parse origin/main)"
+          git tag -f -s -a "$RELEASE_TAG" -m "$RELEASE_TAG" "$merged_sha"
+          git push origin "refs/tags/${RELEASE_TAG}"
+
+      # Fail closed: nothing past this point (floating tag move, GitHub release creation, and --
+      # via the `publish`/`sbom`/`release-assets` jobs below -- PyPI publish, SBOM, attestation)
+      # runs on an unsigned or unverifiable release. Deliberately does not also verify-commit the
+      # merged commit here: per the previous step's comment, that commit structurally cannot carry
+      # the bot's signature, so requiring it to would make this gate fail on every single release.
+      - name: Verify the release tag's signature before publication (fail closed)
+        if: steps.release.outputs.released == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git verify-tag "$RELEASE_TAG"
+
       # Runs before PyPI publish, not after: these two steps are independent, and the Action's
       # `uses: shipsolid/repo-policy@v0` consumers must not be blocked by an unrelated PyPI
       # failure. (A real release found this the hard way: the tag never moved because it was
@@ -97,14 +289,22 @@ jobs:
           git tag -f "$MAJOR_TAG" "$RELEASE_TAG"
           git push origin "$MAJOR_TAG" --force
 
-      - name: Upload distribution artifacts
+      # PSR's own `version` command can't be safely re-invoked here to create the GitHub Release --
+      # it treats an already-existing tag as "nothing to do" and no-ops (confirmed by reading
+      # version.py's `previously_released_versions` check), which is exactly what the tag now is,
+      # since it was pushed directly above rather than by `version --push`. `changelog
+      # --post-to-release-tag` is PSR's own narrower command for precisely this: it builds release
+      # notes from git history for an already-tagged version and creates (or updates) the remote
+      # release for that tag, with no commit/tag/push side effects of its own.
+      - name: Create the GitHub release
         if: steps.release.outputs.released == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: dist
-          path: dist/
-          retention-days: 1
-          if-no-files-found: error
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          pip install --quiet "python-semantic-release==9.21.2"
+          semantic-release changelog --post-to-release-tag "$RELEASE_TAG"
 
   publish:
     name: publish
@@ -146,9 +346,9 @@ jobs:
       id-token: write # actions/attest-build-provenance: Sigstore OIDC signing
       attestations: write # actions/attest-build-provenance: write the attestation to this repo's attestation store
     steps:
-      # Checks out the exact released commit (the tag `release` just pushed), not github.sha --
-      # `release`'s own version-bump commit moved main forward past the commit that triggered this
-      # workflow run, so github.sha now points at that commit's *parent*.
+      # Checks out the exact released commit (the tag `release` just signed and pushed), not
+      # github.sha -- `release`'s own PR merge moved `main` forward past the commit that triggered
+      # this workflow run, so github.sha now points at that commit's *parent*.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.release.outputs.tag }}

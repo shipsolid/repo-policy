@@ -27,6 +27,7 @@ integration` on branch protection/ruleset endpoints, regardless of what the work
 | Attacker who obtains the CI-stored PAT | Full read/write on whatever the PAT's scope covers — not limited to what `policy.yml` declares | Arbitrary branch protection/ruleset changes, or broader if the PAT has full `repo` scope | Scope the PAT as narrowly as GitHub allows (fine-grained PAT, `Administration` permission only, single-repository access); rotate it; never log it (repo-policy never prints the token) |
 | Malicious `policy.yml` in a fork's PR, run via `pull_request_target` | Attacker-controlled config gets a privileged token via workflow misconfiguration | Same blast radius as PAT compromise above | Never run repo-policy's `apply` mode on `pull_request_target` against untrusted input; `audit`/`plan` read-only are lower risk but still exercise real API calls with the token |
 | Naming collision: something else creates a ruleset named `repo-policy:<branch>` | `strict` mode's prune logic would treat it as repo-policy-owned and could delete it | Loss of an unrelated ruleset | The naming convention is a documented hard constraint (see `docs/adrs/0004-*`) — don't create rulesets with that prefix outside repo-policy |
+| Attacker who obtains `RELEASE_BOT_TOKEN` or `RELEASE_BOT_SIGNING_KEY` (Task 10) | Open/merge an arbitrary release PR as the release-bot, or forge a signature that verifies as the bot's identity | A malicious, signature-"verified" release published under the bot's name | Both live only as secrets scoped to the protected `release` GitHub Environment (required-reviewer approval, not a plain repository secret) — see "Release Signing" below; `RELEASE_BOT_TOKEN` is scoped to `Contents: Read and write` + `Pull requests: Read and write` on this single repository only, never full `repo` scope |
 
 ## Authentication
 
@@ -60,6 +61,22 @@ restrict itself to a subset. This is why token scoping (above) is the primary co
   (`shipsolid/repo-policy`) — because that workflow only ever runs `audit`, never `apply`, so it
   has no legitimate need for write access at all. This secret does not exist yet; creating it is a
   live-repo setup step for whoever holds admin access on `shipsolid/repo-policy`.
+- A fourth PAT, `RELEASE_BOT_TOKEN` (Task 10), belongs to the dedicated `shipsolid-release-bot`
+  identity and is what `.github/workflows/release.yml`'s `release` job uses to push its version-bump
+  branch, open and squash-merge the release pull request, push the signed release tag, and create
+  the GitHub release — see "Release Signing" below for the full design. Fine-grained, scoped to this
+  single repository, `Contents: Read and write` + `Pull requests: Read and write` only (no
+  `Administration` — the bot merges through the normal PR path, same as any other collaborator, and
+  never touches branch protection itself). Stored as a secret on the protected `release` GitHub
+  Environment, not as a repository secret, so it's only materialized on the runner after a human
+  approves that environment's required-reviewer gate. Does not exist yet; see the setup checklist
+  below.
+- `RELEASE_BOT_SIGNING_KEY` (Task 10) — the release-bot's SSH private signing key, also stored as a
+  `release`-environment secret (same approval gate as `RELEASE_BOT_TOKEN` above), used by
+  `release.yml` to produce a signed commit and a signed, annotated release tag. The corresponding
+  public key is `RELEASE_BOT_SSH_PUBLIC_KEY`, a plain (non-secret) repository **variable** — public
+  keys don't need encryption, and keeping it as a variable rather than a secret makes it visible in
+  the Actions UI for anyone auditing what key the pipeline currently trusts. Neither exists yet.
 
 ## Vulnerability Management
 
@@ -170,6 +187,118 @@ What you *can* verify for a specific release's Docker image, without trusting an
    attestation verify oci://...` has something to resolve against. Both are real scope beyond this
    SBOM/attestation-plumbing task and are open follow-up items, not done here.
 
+## Release Signing
+
+Task 10 added a dedicated release identity (`shipsolid-release-bot`) and SSH-based commit/tag
+signing to `.github/workflows/release.yml`. See `docs/ci-cd.md`'s "Release-bot identity,
+commit/tag signing, and the PR-merge redesign" for the full research trail and design reasoning
+(why the release **tag**, not the commit that lands on `main`, is the signed and verified artifact —
+a hard GitHub platform constraint, not a design shortcut). This section covers what to do when
+something about that signing setup needs to change.
+
+### What's signed, and how to check it yourself
+
+Every release tag (`v{version}`) is an annotated tag, SSH-signed by the release-bot's key, pushed
+directly (tags are outside branch protection's scope). `release.yml` verifies it itself with
+`git verify-tag` immediately before the floating major tag moves, the GitHub release is created, or
+anything is published to PyPI — a failure there stops the whole pipeline before any of that happens.
+To verify it yourself, from a checkout with the bot's public key registered as a trusted signer:
+
+```bash
+# One-time, per machine: register the bot's public key as a trusted signer for its committer email
+# (the same public key that should be registered on the bot's GitHub account as a Signing Key —
+# see RELEASE_BOT_SSH_PUBLIC_KEY in "Secrets Management" above).
+echo "amitsingh007s+repopolicybot@gmail.com <the bot's SSH public key>" >> ~/.ssh/allowed_signers
+git config gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
+
+git fetch --tags origin
+git verify-tag v<version>
+```
+
+GitHub also shows its own "Verified" badge on the tag/release page once the bot's public key is
+registered there as a Signing Key — that's the independent, third-party confirmation that the
+signature really does belong to the `shipsolid-release-bot` account, not just that some SSH
+signature validates locally. The commit the tag points at on `main` will **not** show as Verified —
+that's expected and documented in `docs/ci-cd.md`, not a bug: GitHub's squash-merge always
+synthesizes a new commit that never carries the bot's (or anyone's) signature, for any merge method.
+
+### Key rotation
+
+Rotate the release-bot's SSH signing key on a routine schedule (annually, at minimum) or immediately
+after any suspected exposure:
+
+1. Generate a new SSH key pair (`ssh-keygen -t ed25519 -C "shipsolid-release-bot release signing"`,
+   generated locally by whoever holds `release`-environment admin access — never inside a workflow
+   run, and never sent anywhere the private half could be logged).
+2. Add the new public key to the bot's GitHub account (Settings → SSH and GPG keys → New SSH key →
+   key type **Signing Key**) **alongside** the old one, not replacing it yet — GitHub will verify a
+   tag against whichever registered key actually signed it, so both can be valid simultaneously
+   during the rotation window.
+3. Update the `release`-environment secret `RELEASE_BOT_SIGNING_KEY` with the new private key, and
+   the repository variable `RELEASE_BOT_SSH_PUBLIC_KEY` with the new public key.
+4. Confirm the next release verifies correctly (`git verify-tag`, and the GitHub "Verified" badge)
+   against the new key.
+5. Remove the old public key from the bot's GitHub account. Past releases signed with it remain
+   verifiable against GitHub's historical record of what was registered when they were signed —
+   removing it going forward does not retroactively invalidate already-published releases.
+
+### Key revocation (suspected compromise)
+
+If the private signing key or `RELEASE_BOT_TOKEN` is suspected compromised, treat it as an incident,
+not a routine rotation:
+
+1. **Immediately** remove the signing key from the bot's GitHub account (Settings → SSH and GPG
+   keys → delete) and revoke/regenerate `RELEASE_BOT_TOKEN` (GitHub → Developer settings → the fine-
+   grained PAT → regenerate or delete) from the bot's account. This stops the key from producing any
+   further "Verified" releases and stops the PAT from opening/merging any further PRs, immediately.
+2. Delete both from the `release` GitHub Environment's secrets so a queued or in-flight workflow run
+   can't pick up the now-revoked credential.
+3. Audit recent releases (`git log --show-signature` on release tags, or the GitHub UI's Verified
+   badges) for anything signed with the compromised key that wasn't a legitimate release from this
+   pipeline. Treat any unexplained signed tag as a confirmed compromise, not a false positive.
+4. Follow the "Key rotation" steps above to provision a replacement identity before the next release
+   is attempted — until then, `release.yml` will fail at the `git verify-tag` step (no valid key
+   configured), which is the correct fail-closed behavior, not a bug to work around.
+5. Record what happened, when the credential was live, and what (if anything) it was used for
+   illegitimately — same audit-trail expectation as "Emergency Recovery" below.
+
+### Release-environment recovery
+
+If the `release` GitHub Environment itself is misconfigured, deleted, or needs to be rebuilt (e.g.
+the required-reviewer list needs to change, or the environment was accidentally removed):
+
+1. Re-create the environment (Settings → Environments → `release`) with a required-reviewer
+   protection rule — see the setup checklist below for the exact configuration.
+2. Re-add `RELEASE_BOT_TOKEN` and `RELEASE_BOT_SIGNING_KEY` as **environment** secrets (not
+   repository secrets — a repository secret bypasses the approval gate entirely, which defeats the
+   point).
+3. Until the environment exists again, `release.yml`'s `release` job simply cannot start — GitHub
+   blocks a job from running against a named `environment:` that doesn't exist on the repository.
+   This is a safe failure mode (no release runs at all) rather than an unsafe one (a release running
+   without the approval gate).
+
+### Removing an unverified release before PyPI publication
+
+`release.yml` is already structured so this should never be reachable in normal operation —
+`git verify-tag` runs before the floating tag moves, before the GitHub release is created, and
+before `publish`/`sbom`/`release-assets` run at all, so an unverified tag stops the pipeline before
+anything ships. If it's ever necessary to undo a release that slipped through anyway (e.g. a manual
+`git push` of an unsigned tag outside this pipeline, or a workflow bug found after the fact):
+
+1. **Do not publish to PyPI** if that step hasn't run yet — PyPI never allows removing or reusing a
+   version number once it's live, so preventing the publish is far cheaper than remediating after.
+2. Delete the GitHub release (Releases page → the release → Delete) and the tag itself
+   (`git push origin :refs/tags/v<version>` — deletes the remote tag; also delete it locally with
+   `git tag -d v<version>`). Deleting a tag is not blocked by branch protection (tags are outside its
+   scope, as established above) but is a destructive, unrecoverable action against the published
+   ref — confirm with whoever else relies on this repository's tags before doing it against anything
+   that might already be in use.
+3. If the floating major tag (`v0`) was already moved to point at the bad release, move it back:
+   `git tag -f v0 <last-good-tag> && git push origin v0 --force`.
+4. If PyPI publication already happened before the problem was caught, this is no longer a "remove
+   an unverified release" scenario — follow `docs/ci-cd.md`'s "Rollback" section instead (yank on
+   PyPI, fix forward).
+
 ## Security Baseline
 
 - Dependencies pinned with upper bounds (`pyproject.toml`).
@@ -182,6 +311,11 @@ What you *can* verify for a specific release's Docker image, without trusting an
 - Every release publishes CycloneDX SBOMs (wheel + Docker Action image) and GitHub artifact
   attestations (Sigstore-backed build provenance) for the wheel, sdist, both SBOMs, and the Docker
   image. See "Verifying release artifacts" above.
+- Every release tag is SSH-signed by a dedicated release-bot identity and verified
+  (`git verify-tag`) before the floating major tag moves, the GitHub release is created, or
+  anything is published to PyPI — publication fails closed if that verification doesn't pass. See
+  "Release Signing" above. **Not yet live** — see "Release Pipeline Setup Checklist" below for what
+  still needs to exist on GitHub before this protection is active.
 
 ## Repository Settings Declared, Pending First `apply`
 
@@ -204,6 +338,63 @@ Advanced Security. `repo-policy` manages both through the REST API's `PATCH /rep
 mechanism it uses for every other declared `repo_settings` toggle. Turning them on for
 `shipsolid/repo-policy` itself now requires running `repo-policy apply` with sufficient credentials
 (repository-admin / fine-grained `Administration: Read and write`), not a separate manual UI step.
+
+## Release Pipeline Setup Checklist (Task 10, Not Yet Done)
+
+`.github/workflows/release.yml` and `pyproject.toml` are already written for the design described in
+"Release Signing" above and in `docs/ci-cd.md`, but none of it can run yet — nothing in this section
+exists on `shipsolid/repo-policy` today. This is the exhaustive list of what needs to exist before
+the first live release under this design; everything below is a live-repo-admin action outside what
+a code change can do on its own (same pattern as `POLICY_AUDIT_TOKEN` above).
+
+1. **The `shipsolid-release-bot` GitHub account** (already created per the dispatch that produced
+   this design):
+   - Add `amitsingh007s+repopolicybot@gmail.com` as a **verified** email on the account — SSH
+     signature verification checks the signing commit/tag's committer email against a verified
+     email on the account that owns the registered signing key, so an unverified email means every
+     release shows as unverified on GitHub even with a technically-valid signature.
+   - Add the bot's SSH **public** key under Settings → SSH and GPG keys → New SSH key, with key type
+     set to **Signing Key** (not "Authentication Key" — the two are registered separately on GitHub
+     and only a Signing Key is checked against commit/tag signatures).
+   - Confirm the bot's collaborator permission level on `shipsolid/repo-policy` is **Write**, not
+     Admin. Write is sufficient — `RELEASE_BOT_TOKEN` only needs to push branches, open PRs, and
+     merge PRs that already satisfy branch protection's requirements (approvals: 0, `CI / required`
+     green); it never touches branch protection/ruleset settings itself, so Admin would be
+     unnecessary standing privilege on a repository that specifically avoids granting exactly that
+     kind of unnecessary standing privilege (see this file's Threat Model).
+2. **`RELEASE_BOT_TOKEN`** — a fine-grained personal access token issued from the bot's own account
+   (not the human owner's), scoped to `shipsolid/repo-policy` only, with repository permissions
+   `Contents: Read and write` and `Pull requests: Read and write` (no `Administration`, no other
+   repository access). Store it as a **secret on the `release` GitHub Environment** (step 4 below),
+   not a repository or organization secret.
+3. **`RELEASE_BOT_SIGNING_KEY`** — the bot's SSH *private* signing key (the one whose public half
+   was added to the bot's account in step 1), generated locally by whoever administers this — never
+   pasted into a workflow run, an issue, or a chat transcript. Store it as a **secret on the
+   `release` GitHub Environment** (step 4 below).
+4. **`RELEASE_BOT_SSH_PUBLIC_KEY`** — the corresponding SSH *public* key, same value as registered
+   on the bot's GitHub account in step 1. Store it as a plain **repository variable** (Settings →
+   Secrets and variables → Actions → Variables), not a secret — it's not sensitive, and keeping it
+   as a variable makes it visible in the Actions UI for anyone auditing which key the pipeline
+   currently trusts.
+5. **The `release` GitHub Environment** (Settings → Environments → New environment, named exactly
+   `release` to match `environment: release` in `release.yml`):
+   - Add a **required reviewers** protection rule naming the repository owner (or whoever should
+     approve releases) — this is the human-in-the-loop gate from brief Step 2; every real release
+     pauses here for a manual approval click before the `release` job's first step runs.
+   - Add `RELEASE_BOT_TOKEN` and `RELEASE_BOT_SIGNING_KEY` (steps 2–3 above) as secrets **scoped to
+     this environment**, not to the repository. An environment secret is only exposed to a job run
+     after that job's environment-protection rules are satisfied; a repository secret would bypass
+     the approval gate entirely and defeat the point of this step.
+   - Recommended, not required: restrict the environment's allowed deployment branches to `main` —
+     `release.yml`'s only trigger is already `push: branches: [main]`, so this is defense in depth,
+     not a functional requirement.
+
+Until all five are in place, pushes to `main` will still run CI (unaffected — `ci.yml`'s own direct
+trigger and `release.yml`'s `ci` job both work today), but `release.yml`'s `release` job will fail to
+even start (no `release` environment to satisfy) or fail immediately on first use of a missing
+secret. That is the correct, safe state to be in until setup is complete — it fails closed, the same
+way `POLICY_AUDIT_TOKEN` not existing yet means `policy-audit.yml` fails rather than silently
+skipping its audit.
 
 ## Emergency Recovery
 

@@ -5,7 +5,7 @@
 | Workflow | File | Trigger | Purpose |
 |---|---|---|---|
 | CI | `.github/workflows/ci.yml` | every PR, push to `main`, and as a reusable workflow called from Release | lint, typecheck, unit tests, package build, workflow security scan |
-| Release | `.github/workflows/release.yml` | push to `main` | run CI, then (if CI passes) version bump, changelog, git tag, floating major tag, PyPI publish, SBOM generation, artifact attestation |
+| Release | `.github/workflows/release.yml` | push to `main` | run CI, then (if CI passes, and a human approves the `release` environment) compute a version bump, land it on `main` via a signed, release-bot-authored pull request, sign and push the release tag, PyPI publish, SBOM generation, artifact attestation |
 | Security | `.github/workflows/security.yml` | every PR, push to `main`, weekly schedule | dependency-vulnerability scanning (pip-audit), static code analysis (CodeQL: Python + Actions), a second, weekly zizmor pass -- advisory/reporting, not PR-blocking (see below) |
 | Policy Audit | `.github/workflows/policy-audit.yml` | daily schedule, push to `main` touching the policy file or itself, manual dispatch | read-only `repo-policy audit` against this repo's own `.github/repository-policy.yml` (Task 9 dogfooding) -- reports drift, never mutates; not PR-blocking |
 
@@ -55,20 +55,138 @@ cross-run SHA to validate.
 `release.yml` calls `ci.yml` again as a reusable workflow, every push to `main` runs the CI job
 graph twice — once producing the standalone `CI / required` check, once nested under `Release / ci`
 gating the release. This is deliberate: reliability of "is `main` green" outweighs the modest extra
-compute for a repository this size.
+compute for a repository this size. A real release now runs it a third time too — see below.
+
+### Release-bot identity, commit/tag signing, and the PR-merge redesign (Task 10)
+
+Task 9 applied real branch protection to `main` on `shipsolid/repo-policy`:
+`pull_requests.required: true` plus `enforce_admins: true`, and `repo-policy` deliberately never
+manages a PR-bypass allowlist for this repo (`bypass_pull_request_allowances` is read-through in
+`src/repo_policy/policies/pull_requests.py` — never cleared, never set). The practical effect:
+nothing can push directly to `main` anymore, including this workflow's own `python-semantic-release`
+step, which previously did exactly that with `secrets.GITHUB_TOKEN`. This section documents the
+research behind the redesign that followed and the reasoning for each departure from the pre-Task-10
+design; see `SECURITY.md`'s "Release Signing" section for what's signed, how to verify it, and the
+key-rotation/recovery procedures, and its "Release Pipeline Setup Checklist" for exactly what still
+needs to exist on GitHub before any of this can run for real.
+
+**What `python-semantic-release` v9 actually supports (checked against the installed `9.21.2`, not
+assumed):** its `version` command — what the pinned `python-semantic-release/python-semantic-release`
+Action wraps, confirmed by decoding that Action's `action.sh` — exposes `--push`/`--no-push` and
+`--vcs-release`/`--no-vcs-release` as independent flags (`semantic-release version --help`), and its
+own `gitproject.py` shells out to plain `git commit`/`git tag -a`/`git push` with no signing
+override, so local `git config` (`commit.gpgsign`, `tag.gpgSign`, `gpg.format`) applies to whatever
+PSR does exactly as it would to a manual `git commit`. That's what makes the split below possible:
+`version --no-push --no-vcs-release` computes the bump, writes it to `pyproject.toml`/`__init__.py`,
+builds `dist/`, and creates a **local, signed** commit and tag — without ever touching the network.
+Separately, PSR's `publish` command turns out to be for uploading already-built distributions to an
+*existing* VCS release (`hvcs_client.upload_dists`), not for creating one — the command that actually
+does what this pipeline needs post-merge is `changelog --post-to-release-tag <tag>`, which builds
+release notes from git history for an already-tagged version and creates (or updates) the remote
+release for it, with no commit/tag/push side effects of its own. Re-running `version` a second time
+after the tag already exists was considered and rejected: PSR treats an already-released version as
+"nothing to do" (checked via `previously_released_versions` in `version.py`) and silently no-ops,
+so it can't be used to "finish" a release after an out-of-band tag push.
+
+**Tag protection vs. branch protection (verified, not assumed):** the task that produced this
+redesign started from a documentation-based hypothesis that classic branch protection — the
+`branch_protection` enforcement `repository-policy.yml` declares for `main`, which calls
+`PUT /repos/{owner}/{repo}/branches/{branch}/protection` (`src/repo_policy/github_client.py`) — only
+ever governs `refs/heads/<branch>`, and that tag pushes (`refs/tags/*`) are a structurally separate,
+ungoverned namespace unless a *different* mechanism (a classic tag-protection rule, or a Ruleset with
+a tag target) is also configured. That was checked against GitHub's own documentation rather than
+taken on faith: the classic-protected-branches docs never mention tags at all and describe every
+setting (including "Require linear history") purely in terms of branches; the Rulesets docs describe
+tag-scoped rules as a *separate*, opt-in capability ("you specify which branches or tags... the
+ruleset applies to"), not something a branch-scoped rule inherits. `repository-policy.yml` declares
+neither a Ruleset nor a classic tag-protection rule for this repository, and the branch-protection
+REST endpoint is structurally incapable of addressing a tag (its URL is parameterized by branch
+name). Conclusion: the hypothesis holds, and the release tag can still be pushed directly, exactly
+as before Task 9 — this residual uncertainty is real (this dispatch had no live-repo API access to
+positively confirm no *other*, out-of-band tag protection exists on `shipsolid/repo-policy` today)
+but every piece of evidence available says tags remain ungoverned.
+
+**Why the commit landing on `main` can't itself be the signed artifact:** the obvious design —
+sign the commit locally, push a branch, merge via PR, done — runs into a hard GitHub platform
+constraint. GitHub's merge API creates a **new commit** for every merge method: squash always
+synthesizes one from the PR's diff; even rebase-merge, which looks like it should fast-forward
+when the base hasn't moved, "always updates the committer information and creates new commit SHAs"
+per GitHub's own docs, and "the commits ... are added to the base branch without commit signature
+verification" because "GitHub didn't truly create this commit, and can't therefore sign it" with the
+original author's key. There is no merge method that lands the release-bot's exact, pre-signed
+commit object on `main` through a required PR merge — full stop, not a gap in this design. The
+annotated release **tag** doesn't have this problem: it's a separate git object from the commit it
+points at, created and pushed directly (tags being outside branch protection's scope, per the
+research above) against whatever commit actually landed on `main`, carrying its own valid signature
+regardless of whether that underlying commit is itself signed. From Task 10 on, the tag — not the
+commit — is this pipeline's cryptographically-verified release artifact; `release.yml`'s
+`git verify-commit HEAD` right after PSR runs is a signing *smoke test* on the pre-merge commit
+(confirms the signing config works before spending a PR/CI/approval cycle on it), not the release's
+real verification gate. That's `git verify-tag`, run once against the pushed tag, immediately before
+anything downstream (floating-tag move, GitHub release creation, PyPI publish, SBOM/attestation)
+is allowed to proceed.
+
+**Why squash, specifically, not rebase:** `linear_history: true` already rules out a merge commit.
+Between squash and rebase, squash was chosen because `gh pr merge --squash --subject "..."` lets this
+pipeline set the final commit message on `main` independently of the PR's own head commit's message
+— needed for the `[skip ci]` timing below. Rebase-merge replays the original commit(s) verbatim; there
+would be no way to inject `[skip ci]` into the landing commit without it also being present on the
+PR's head commit, which breaks the next point entirely.
+
+**Why `[skip ci]` moved from the commit message to the merge subject:** the pre-Task-10
+`commit_message` (`"chore(release): {version} [skip ci]"`, in `pyproject.toml`) existed to stop the
+version-bump commit's own push from re-triggering `ci.yml`/`release.yml`. GitHub's skip-ci keywords
+are evaluated against "the commit that contains the skip instructions" for **both** `push` and
+`pull_request` events — including "the HEAD commit of a pull request." If the release-bot's local
+commit still carried `[skip ci]` when pushed to its branch and opened as a PR, `ci.yml`'s
+`pull_request` trigger would be skipped too, `CI / required` would never appear on the PR, and the
+merge — which this pipeline waits on that exact check for — would hang forever. So `commit_message`
+in `pyproject.toml` dropped `[skip ci]` entirely, and it's added back only in the squash-merge's own
+subject (`gh pr merge --subject "chore(release): ${TAG} [skip ci]"`), so only the commit that
+actually lands on `main` carries it. That matters beyond tidiness: `RELEASE_BOT_TOKEN` is a real PAT,
+and unlike the default `GITHUB_TOKEN` (whose pushes never trigger new workflow runs — GitHub's own
+recursion guard), a PAT's pushes trigger normally. Without `[skip ci]` on the landing commit, the
+squash-merge would fire `release.yml` again on itself — harmless in the end (PSR would find nothing
+new to release and no-op) but wasteful, and it would demand a second, redundant owner-approval click
+on the `release` environment for no real release.
+
+**The required-check wait is scoped to what's actually required:** `gh pr checks --required --watch`
+waits only for `CI / required` — the one check `repository-policy.yml` actually lists under
+`status_checks.required` — not every check the PR triggers. `security.yml`'s pip-audit/CodeQL/zizmor
+jobs also run on this PR (nothing special-cases a release-bot PR out of them) but are advisory, not
+PR-blocking (see "Security workflow" below), so waiting on them here would add latency for no gate
+that exists. The wait is bounded (`timeout 1800`) so a genuinely broken `CI / required` fails the
+release job loudly rather than blocking the `release-main` concurrency queue indefinitely; even if
+that client-side wait had a race (e.g. polling before GitHub has registered the PR's check suite),
+the subsequent `gh pr merge` call is independently rejected server-side by GitHub if the required
+check hasn't actually reported success — the wait loop is a convenience, not the enforcement.
+
+**The owner-approval gate:** the `release` job now declares `environment: release`. Once that
+environment exists with a required-reviewer protection rule (see `SECURITY.md`'s setup checklist),
+every real release pauses there for a human approval click before the job's first step runs — and,
+because `RELEASE_BOT_TOKEN` and the SSH signing key are environment secrets rather than repository
+secrets, they aren't even materialized on the runner until that approval is granted. This is a
+deliberate behavior change from the pre-Task-10 pipeline, which released fully automatically on every
+qualifying push to `main`: from Task 10 on, a push to `main` still runs CI and computes the version
+bump automatically, but landing it requires one manual approval per release.
 
 ## Branch Strategy
 
-Single `main` branch. No release branches; every release is cut directly from `main` by
-`python-semantic-release` reading Conventional Commits history since the last release tag.
+Single `main` branch, no long-lived release branches. Every release is still computed from `main`'s
+own history by `python-semantic-release` reading Conventional Commits since the last release tag;
+the only branch involved is the release-bot's own short-lived `release-bot/v{version}` branch (Task
+10), which exists solely to carry the version-bump commit through the required pull request and is
+deleted immediately on merge (`gh pr merge --delete-branch`).
 
 ## Release Process
 
-1. A commit lands on `main` (directly, or via a merged PR).
+1. A commit lands on `main` (via a merged PR — nothing can push directly to `main` since Task 9).
 2. `release.yml`'s `ci` job runs the full CI job graph (lint, typecheck, test, build, security)
    against that commit. If any of it fails, nothing below happens — the `release` and `publish`
    jobs are skipped, not just conditioned to no-op.
-3. `python-semantic-release` inspects commits since the last release tag:
+3. `release` waits for a human to approve the `release` GitHub Environment (see "The owner-approval
+   gate" above and `SECURITY.md`'s setup checklist). Once approved, `python-semantic-release`
+   inspects commits since the last release tag:
    - `feat: ...` → minor bump
    - `fix: ...` → patch bump
    - `feat!: ...` or a `BREAKING CHANGE:` footer → major bump
@@ -76,27 +194,39 @@ Single `main` branch. No release branches; every release is cut directly from `m
 4. If a release is warranted, it bumps `pyproject.toml`'s `project.version` **and**
    `src/repo_policy/__init__.py`'s `__version__` (via `version_variables` in
    `[tool.semantic_release]` — both must be listed, or they silently diverge; this happened once
-   in production, see `docs/test-strategy.md`), regenerates `CHANGELOG.md`, commits as
-   `chore(release): {version} [skip ci]`, and tags `v{version}`.
-5. Before anything below runs, the workflow diffs that release commit against the pre-release
-   commit and fails the job if it touched anything other than `pyproject.toml`,
-   `src/repo_policy/__init__.py`, and `CHANGELOG.md` — a check against a compromised or
+   in production, see `docs/test-strategy.md`), regenerates `CHANGELOG.md`, and creates a **local**,
+   release-bot-signed commit (`chore(release): {version}`) and tag (`v{version}`) — neither is
+   pushed yet.
+5. The workflow diffs that local commit against the pre-release commit and fails the job if it
+   touched anything other than `pyproject.toml`, `src/repo_policy/__init__.py`, and
+   `CHANGELOG.md` — an early, fail-fast copy of the check in step 8, against a compromised or
    misbehaving semantic-release run silently slipping in an unrelated code change.
-6. The floating major tag (`v0` until a `1.0.0` ships — see README) is force-moved to point at the
-   new release tag.
-7. The built sdist/wheel are handed off (via `actions/upload-artifact` / `download-artifact`) to a
-   separate `publish` job, and published to PyPI via trusted publishing (OIDC) — no long-lived API
-   token stored in the repo.
-8. In parallel with `publish`, two more jobs (Task 8) handle SBOM and provenance: `sbom`
-   re-checks out the exact released commit (by tag, since `release`'s own push moved `main` past
-   `github.sha`), generates a CycloneDX SBOM for the wheel's install environment and one for the
-   Docker Action image (built fresh from the release commit's `Dockerfile`), and signs GitHub
-   artifact attestations (Sigstore-backed build provenance) for the wheel, sdist, both SBOMs, and
-   the Docker image (by digest); `release-assets` then attaches the two SBOM files to the GitHub
-   release `release`'s own python-semantic-release step already created. Split into two jobs
-   rather than one so no single job ever holds both `contents: write` (needed to attach release
-   assets) and `id-token: write` (needed to mint attestations) at once — see "SBOM and provenance"
-   below and `SECURITY.md`'s "Verifying release artifacts" for how to check these.
+6. The release-bot pushes a `release-bot/v{version}` branch and opens a pull request into `main`.
+7. The workflow waits for that PR's required check (`CI / required`) and squash-merges it as the
+   release-bot, with `[skip ci]` added to the squash commit's own message (not present earlier —
+   see "Why `[skip ci]` moved..." above) so the merge doesn't re-trigger this same workflow.
+8. The workflow diffs the now-merged commit on `main` against the pre-release commit — the
+   re-scoped, real copy of step 5's check, since GitHub's squash-merge always creates a new commit
+   distinct from the one diffed in step 5.
+9. The release-bot creates, signs, and pushes the `v{version}` tag directly against that merged
+   commit (tags are outside branch protection's scope — see "Tag protection vs. branch protection"
+   above), then verifies its own signature with `git verify-tag` before anything below runs. The
+   floating major tag (`v0` until a `1.0.0` ships — see README) is force-moved to point at it, and
+   `semantic-release changelog --post-to-release-tag` creates the GitHub release for it.
+10. The built sdist/wheel (built locally in step 4, before any of the push/PR/merge machinery
+    above — their file contents don't change when the surrounding commit gets squashed) are handed
+    off (via `actions/upload-artifact` / `download-artifact`) to a separate `publish` job, and
+    published to PyPI via trusted publishing (OIDC) — no long-lived API token stored in the repo.
+11. In parallel with `publish`, two more jobs (Task 8) handle SBOM and provenance: `sbom`
+    re-checks out the exact released commit (by tag, since the release-bot's own PR merge moved
+    `main` past `github.sha`), generates a CycloneDX SBOM for the wheel's install environment and
+    one for the Docker Action image (built fresh from the release commit's `Dockerfile`), and signs
+    GitHub artifact attestations (Sigstore-backed build provenance) for the wheel, sdist, both
+    SBOMs, and the Docker image (by digest); `release-assets` then attaches the two SBOM files to
+    the GitHub release step 9 already created. Split into two jobs rather than one so no single job
+    ever holds both `contents: write` (needed to attach release assets) and `id-token: write`
+    (needed to mint attestations) at once — see "SBOM and provenance" below and `SECURITY.md`'s
+    "Verifying release artifacts" for how to check these.
 
 ### Permission scoping and concurrency
 
@@ -105,10 +235,15 @@ Each job in `release.yml` carries only the permission its own steps need:
 | Job | Permissions | Why |
 |---|---|---|
 | `ci` | `contents: read` | Only checks out code to lint/type-check/test/build. |
-| `release` | `contents: write` | Pushes the semantic-release commit and moves the floating tag. |
+| `release` | `contents: read` (default token); real write access comes from `secrets.RELEASE_BOT_TOKEN` instead | Every push, PR open/merge, tag push, and GitHub-release creation in this job authenticates as the release-bot via its own PAT, not the workflow's ambient `GITHUB_TOKEN` — so the default token's own `permissions:` grant stays at read-only. Gated behind the `environment: release` approval; `RELEASE_BOT_TOKEN` and the SSH signing key are environment secrets, not repository secrets, so they don't exist on the runner until a human approves. |
 | `publish` | `id-token: write` | OIDC trusted publishing only — never checks out the repo, never sees `contents: write`. |
 | `sbom` | `contents: read`, `id-token: write`, `attestations: write` | Generates SBOMs and signs Sigstore-backed attestations. Its own steps (installing a PyPI package, `docker build`, `pip install` a built wheel) aren't narrow enough to also trust with `contents: write` in the same job — see "SBOM and provenance" below for why that matters concretely (PyPI trusted publishing matches on repository + workflow filename). |
 | `release-assets` | `contents: write` only | Attaches the SBOMs `sbom` produced to the GitHub release. Never checks out the repo and never holds `id-token: write` — mirrors the `release`/`publish` split for the same reason. |
+
+The `release` job's own default-token `permissions: contents: read` is what it needs anyway (the
+`python-semantic-release` Action's compute-only invocation is given `secrets.GITHUB_TOKEN` purely
+because its `github_token` input is required by its schema — with `push`/`vcs_release` both `false`
+it never actually calls out with that token; confirmed by reading `version.py`, not assumed).
 
 The workflow-level default is `permissions: {}`; nothing falls back to the repository's broader
 default token permissions.
@@ -252,6 +387,11 @@ recover from a bad release:
    (the version number itself can never be reused, even after yanking).
 3. If the floating `v0` tag now points at a bad commit and a fix hasn't shipped yet, it can be
    moved back manually: `git tag -f v0 <last-good-tag> && git push origin v0 --force`.
+
+If the release tag itself fails `git verify-tag` (Task 10's fail-closed gate, right before the
+floating-tag move and PyPI publish), the pipeline already stops on its own before anything ships —
+see `SECURITY.md`'s "Release Signing" section for how to remove that unverified release/tag before
+it reaches PyPI, and for signing-key rotation and revocation procedures.
 
 ## Known Platform Constraint: `secrets.GITHUB_TOKEN` Cannot Run This Action
 

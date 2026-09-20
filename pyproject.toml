@@ -54,7 +54,15 @@ version_toml = ["pyproject.toml:project.version"]
 version_variables = ["src/repo_policy/__init__.py:__version__"]
 branch = "main"
 build_command = "pip install build && python -m build"
-commit_message = "chore(release): {version} [skip ci]"
+# Deliberately NOT "[skip ci]" here (unlike before Task 10): this is the commit message for the
+# release-bot's LOCAL, pre-merge commit on its release branch -- the one whose pull request needs a
+# real `ci.yml` run to produce the `CI / required` check that branch protection requires before
+# merge. GitHub's skip-ci keywords are evaluated against "the HEAD commit of a pull request" for
+# both push and pull_request events, so putting [skip ci] here would silently prevent that check
+# from ever being created and permanently block the release PR from merging. `[skip ci]` still gets
+# added, but later and only to the squash-merge commit that actually lands on `main`, via
+# release.yml's `gh pr merge --subject` -- see that workflow for the full reasoning.
+commit_message = "chore(release): {version}"
 
 [tool.semantic_release.changelog]
 changelog_file = "CHANGELOG.md"
