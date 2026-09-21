@@ -18,12 +18,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Exact pins, not floors: `ruff format --check`, `ruff check` and `mypy` gate every merge, and a
+# floor (`ruff>=0.6`) lets an upstream release turn CI red with nothing in this repo having
+# changed -- the same failure mode scripts/verify-action-lock.sh guards against for hatchling.
+# Dependabot's weekly pip group (see .github/dependabot.yml) proposes the bumps instead.
 dev = [
-    "pytest>=8.0",
-    "pytest-cov>=5.0",
-    "respx>=0.21",
-    "ruff>=0.6",
-    "mypy>=1.10",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "respx==0.23.1",
+    "ruff==0.16.8",
+    "mypy==2.3.1",
 ]
 
 [project.scripts]
