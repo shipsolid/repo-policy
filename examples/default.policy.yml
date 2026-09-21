@@ -1,0 +1,116 @@
+# ============================================================================
+# repo-policy — default.policy.yml
+# ============================================================================
+#
+# A ready-to-use branch protection baseline for `main`, based on widely
+# adopted industry practice (GitHub's own recommended settings plus common
+# open-source and enterprise conventions). Safe to apply as-is to most
+# repositories — but read the two REQUIRED customizations marked below
+# before you do.
+#
+# Usage:
+#   cp examples/default.policy.yml policy.yml
+#   repo-policy validate
+#   repo-policy plan  --repo your-org/your-repo
+#   repo-policy apply --repo your-org/your-repo
+#
+# Want to see every field the schema supports, each one explained in full?
+# See examples/sample-repository-policy.yml instead — this file is
+# deliberately a lean, opinionated subset of it, not a field reference.
+#
+# Full docs: README.md (schema reference) · USAGE.md (step-by-step) ·
+# ARCHITECTURE.md (design) · docs/adrs/ (why these defaults exist)
+#
+# Not declared here at all: top-level `strict:`. It defaults to `false`
+# ("managed-scope") — this policy will only ever touch the branch and
+# fields declared below, never reset something you didn't mention. See
+# USAGE.md's "Managed-scope vs. strict" section before turning it on.
+
+version: 1
+
+branches:
+  # REQUIRED customization #1: rename this key if your default branch isn't
+  # literally `main` (e.g. `master`, `trunk`).
+  main:
+    # Classic branch protection — the schema default, and the mechanism
+    # most teams already recognize from GitHub's own settings UI. See
+    # README's "Schema & Validation" if you'd rather use the newer GitHub
+    # Rulesets backend instead (`enforcement: ruleset`).
+    enforcement: branch_protection
+
+    pull_requests:
+      required: true
+      # 1 is a broadly-applicable baseline: real review, without blocking a
+      # small team that has no second approver to spare. Raise to 2+ for a
+      # larger team or a regulated/compliance-scoped project.
+      approvals: 1
+      # Turn on once you have a CODEOWNERS file — false is the safe default
+      # until then, since there's nothing yet for it to enforce.
+      code_owner_review: false
+      dismiss_stale_reviews: true
+      require_last_push_approval: true
+
+    # REQUIRED customization #2: replace with your repo's actual CI check
+    # names, exactly as GitHub reports them on a pull request — not your
+    # workflow's `name:` field, and often not what you'd guess from the
+    # workflow YAML. Left empty here on purpose: a placeholder name that
+    # doesn't match your real CI would block every PR forever, waiting on a
+    # status that will never be reported. Confirm the real name(s) from a
+    # recent PR's checks list, then fill this in, e.g.:
+    #   required: [build, test]
+    status_checks:
+      required: []
+
+    # Opt-in hardening, off by default — most repos don't have commit
+    # signing set up yet. Turn on once your contributors sign commits.
+    signed_commits: false
+    # Merge-commit vs. squash/rebase is a team workflow preference, not a
+    # security control — left off so this policy doesn't force one.
+    linear_history: false
+    # Block force-pushes to main. Universally recommended.
+    allow_force_push: false
+    # Block deleting main. Universally recommended.
+    allow_deletion: false
+    # All PR review conversations must be marked resolved before merging.
+    required_conversation_resolution: true
+    lock_branch: false
+    allow_fork_syncing: false
+    # This policy file becomes the source of truth for push access, clearing
+    # any allowlist configured out-of-band before repo-policy existed.
+    clear_restrictions: true
+    # Left off by default — see the note below before turning it on.
+    enforce_admins: false
+
+    # A note on `enforce_admins`: setting it to `true` means even repo
+    # admins must go through a passing PR to change main — no bypass for
+    # anyone, including you. It's real, meaningful protection, but it also
+    # means a broken required status check can block the very fix that
+    # would repair it, with no built-in escape hatch. Turn it on once your
+    # CI is stable and you have a recovery plan you trust (e.g. a
+    # documented, auditable way to temporarily relax protection via the
+    # GitHub UI or a reviewed policy.yml change) — not on day one of
+    # adopting repo-policy.
+
+repo_settings:
+  # Deletes a PR's head branch automatically once it merges.
+  delete_branch_on_merge: true
+  # Lets a PR be brought up to date with its base branch without needing
+  # push access to that base branch.
+  allow_update_branch: true
+  # Dependabot alerts for vulnerable dependencies.
+  vulnerability_alerts: true
+  # Dependabot automated security-fix pull requests. Requires
+  # vulnerability_alerts: true, which is also set above.
+  automated_security_fixes: true
+  # Lets researchers privately report a vulnerability instead of only via a
+  # public issue.
+  private_vulnerability_reporting: true
+  # Secret scanning is free on public repositories; private repositories
+  # need GitHub Advanced Security for it to take effect. If you're on a
+  # private repo without GHAS, `repo-policy apply`/`audit` will report
+  # these two fields `unavailable` rather than fail outright — see
+  # docs/troubleshooting.md.
+  secret_scanning: true
+  # Blocks a push containing a detected secret before it lands in history.
+  # Requires secret_scanning: true, which is also set above.
+  secret_scanning_push_protection: true

@@ -1,0 +1,272 @@
+# ============================================================================
+# repo-policy — sample-repository-policy.yml
+# ============================================================================
+#
+# This is a REFERENCE file, not a starter template. It deliberately turns on
+# every field the policy.yml schema supports, so you can see each one in
+# context with an explanation of what it does, its type/range, its default,
+# and any gotcha attached to it. Do not `apply` this file as-is against a real
+# repository — copy the individual fields you actually want into your own
+# policy.yml instead.
+#
+# Two branches are declared below because some fields only exist under one of
+# repo-policy's two enforcement backends:
+#   - `main`    uses `enforcement: branch_protection` — the only backend that
+#               supports every field in the schema.
+#   - `develop` uses `enforcement: ruleset` — GitHub Rulesets, which has no
+#               equivalent for five of the branch_protection-only fields (each
+#               one is called out where it would otherwise appear).
+#
+# Validate this file yourself before trusting anything in it — entirely
+# offline, no GitHub credentials needed:
+#
+#   repo-policy validate --config examples/sample-repository-policy.yml
+#
+# Further reading:
+#   - README.md          "Schema & Validation" — the canonical field/type table
+#   - USAGE.md            step-by-step walkthrough of validate/audit/plan/apply
+#   - ARCHITECTURE.md    "Apply Safety Model" — managed-scope vs. strict, and
+#                         the two known v1 schema gaps referenced below
+#   - docs/adrs/          why each of these design choices was made
+#   - .github/repository-policy.yml
+#                         this repository's own REAL, in-production policy —
+#                         a worked example, not a reference of every field
+version: 1 # Required. Must be exactly `1` — the only schema version repo-policy supports today.
+
+# ----------------------------------------------------------------------------
+# Top-level `strict` — the default for every branch below, unless a branch
+# sets its own `strict:` (a branch's own value always wins over this one).
+# ----------------------------------------------------------------------------
+#
+# false (the default, and repo-policy's overall default) = "managed-scope":
+#   - A branch absent from `branches:` below is never touched at all.
+#   - Within a branch that IS declared, only the fields you actually write
+#     are enforced. Everything else is read from GitHub's current live state
+#     and left exactly as-is — repo-policy will never reset or remove a
+#     setting just because you didn't mention it.
+#   This is what makes repo-policy safe to point at an already-live
+#   repository someone configured by hand years ago — see
+#   docs/adrs/0003-managed-scope-default-strict-opt-in.md.
+#
+# true = full desired-state enforcement (Terraform-style):
+#   - Any field left unset on a declared branch is actively reset to its
+#     permissive ("no rule") default.
+#   - On `ruleset`-enforced branches only, any `repo-policy:<branch>`-named
+#     ruleset whose branch is no longer declared here gets deleted on the
+#     next `apply` (ownership is proven by that exact naming convention —
+#     see docs/adrs/0004-ruleset-ownership-via-naming-convention.md).
+#   - `branch_protection`-enforced branches have no equivalent cleanup: a
+#     classic branch-protection object has no ownership marker, so removing
+#     one from a `strict` policy is still a manual, GitHub-side action —
+#     documented as a known v1 limitation in ARCHITECTURE.md.
+#
+# Shown here as `false` (managed-scope) — the safer choice for a first-time
+# `apply` against a repository you don't already fully control end to end.
+strict: false
+
+branches:
+  # ==========================================================================
+  # Example 1 of 2 — `main`, enforcement: branch_protection
+  # ==========================================================================
+  # Classic branch protection is the only backend that supports every field
+  # in the schema, including the five that GitHub Rulesets has no equivalent
+  # for (enforce_admins, required_conversation_resolution, lock_branch,
+  # allow_fork_syncing, clear_restrictions — all shown below).
+  main:
+    enforcement: branch_protection
+
+    # Uncomment to override the top-level `strict:` default for this branch
+    # only — a branch's own `strict` always wins over the top-level value:
+    # strict: true
+
+    # --- Pull request requirements ------------------------------------------
+    pull_requests:
+      required: true
+      # Number of required approving reviews. Integer, 0–6 inclusive — 6 is
+      # the maximum GitHub allows, not a recommendation; shown here as the
+      # ceiling purely so this file demonstrates the top of the valid range.
+      # Most teams use 1–2. Default if omitted: 1.
+      approvals: 6
+      # If a CODEOWNERS file assigns an owner to any changed path, at least
+      # one matching code owner's approval is required too. Default: false.
+      code_owner_review: true
+      # A new commit pushed to the PR branch invalidates prior approvals,
+      # forcing re-review. Default: false.
+      dismiss_stale_reviews: true
+      # The most recent push to the PR must itself have been approved
+      # (blocks a "approve, then sneak in one more unreviewed commit, then
+      # merge" race). Default: false.
+      require_last_push_approval: true
+
+    # --- Required status checks ---------------------------------------------
+    status_checks:
+      # The exact check-run names GitHub must see report success before a PR
+      # can merge — not your workflow's `name:` field, and often not what
+      # you'd guess from the workflow YAML. Confirm the real name from a
+      # recent PR's checks list on the actual repository before declaring it
+      # here; a wrong name blocks every PR forever waiting for a status that
+      # will never be reported. No blank or duplicate entries allowed.
+      required:
+        - build
+        - test
+        - lint
+      # NOTE — known schema gap, not an oversight: GitHub's own "Require
+      # branches to be up to date before merging" toggle (the status-check
+      # object's own `strict` field in GitHub's REST API — unrelated to this
+      # file's top-level `strict:` above, an unfortunate name collision
+      # between the two systems) is NOT modeled by repo-policy's schema at
+      # all in v1. repo-policy cannot declare or enforce it either way. See
+      # ARCHITECTURE.md's "Apply Safety Model" section.
+
+    # --- Commit and history rules -------------------------------------------
+    # Every commit on this branch must carry a verified signature (GPG or
+    # SSH). Default: false.
+    signed_commits: true
+    # No merge commits — only squash or rebase merges land on this branch.
+    # Default: false.
+    linear_history: true
+
+    # --- Force-push / deletion protection -----------------------------------
+    # NOTE the inverted polarity on these two: `true` is the PERMISSIVE value
+    # (the action is allowed / no restriction exists), `false` is what
+    # actually restricts it. This mirrors GitHub's own `allow_force_pushes`/
+    # `allow_deletions` API fields directly.
+    #
+    # false = force-pushes to this branch are blocked. Default: true.
+    allow_force_push: false
+    # false = this branch cannot be deleted. Default: true.
+    allow_deletion: false
+
+    # --- The five fields with no GitHub Rulesets equivalent -----------------
+    # Every field in this block is REJECTED by validate/apply if declared to
+    # a non-permissive value under `enforcement: ruleset` — see Example 2
+    # below for where they'd otherwise go and why they're simply absent
+    # there instead of commented out.
+
+    # true = repository admins are bound by every rule above too — no bypass
+    # for anyone, including whoever holds admin credentials. Default: false.
+    # Cost: you can also lock yourself out if a required status check can
+    # never go green (e.g. CI itself breaks) — see SECURITY.md's "Emergency
+    # Recovery" section for the documented, auditable bypass procedure
+    # before you turn this on for a repository with only one maintainer.
+    enforce_admins: true
+    # true = every open review conversation on the PR must be marked
+    # resolved before it can merge, not just approved. Default: false.
+    required_conversation_resolution: true
+    # true = converts this branch to fully read-only — blocks ALL pushes,
+    # including PR merges. Shown as `false` here because an active branch
+    # like `main` needs to stay mergeable; `lock_branch: true` is more
+    # commonly used on a frozen/archived branch (e.g. a retired release
+    # line) than on the branch your team merges into every day. Default:
+    # false.
+    lock_branch: false
+    # Lets forks sync updates from this branch even while it's locked.
+    # GitHub silently resets this back to `false` unless `lock_branch: true`
+    # is ALSO set on the same branch — repo-policy enforces that pairing at
+    # validate time rather than letting a silently-ignored value ship (see
+    # models.py's `_allow_fork_syncing_requires_lock_branch` validator).
+    # Left `false` here to match `lock_branch: false` above; flip both to
+    # `true` together on a branch you're deliberately freezing. Default:
+    # false.
+    allow_fork_syncing: false
+    # true = clears any push-restriction allowlist GitHub may already hold
+    # for this branch out-of-band (e.g. set by hand in the GitHub UI before
+    # this policy existed), so this policy file becomes the single source
+    # of truth for who can push. `false` means the opposite of what it
+    # might look like: it does NOT create or preserve a specific
+    # restriction — repo-policy has no way to declare an arbitrary push
+    # allowlist itself — it only means "leave whatever restriction already
+    # exists on GitHub untouched." Default: true.
+    clear_restrictions: true
+
+  # ==========================================================================
+  # Example 2 of 2 — `develop`, enforcement: ruleset
+  # ==========================================================================
+  # GitHub Rulesets. repo-policy creates/reads/updates exactly one ruleset
+  # for this branch, named `repo-policy:develop` — ownership is proven purely
+  # by that name (docs/adrs/0004-ruleset-ownership-via-naming-convention.md),
+  # so `strict: true` can safely delete it later if `develop` is ever removed
+  # from this file, without a state file anywhere.
+  develop:
+    enforcement: ruleset
+
+    # A lighter-weight policy than `main` on purpose, to also show that a
+    # verbose reference file doesn't mean every branch has to max out every
+    # value — pick what's appropriate per branch.
+    pull_requests:
+      required: true
+      approvals: 1
+      code_owner_review: false
+      dismiss_stale_reviews: true
+      require_last_push_approval: false
+
+    status_checks:
+      required:
+        - build
+        - test
+
+    signed_commits: false
+    linear_history: false
+
+    # Same inverted polarity as in the `main` example above.
+    allow_force_push: false
+    allow_deletion: false
+
+    # NOT declared here at all — enforce_admins, required_conversation_
+    # resolution, lock_branch, allow_fork_syncing, clear_restrictions.
+    # None of the five has a GitHub Rulesets equivalent; setting any of them
+    # to a non-permissive value under `enforcement: ruleset` is a
+    # validate-time error (`... not supported under enforcement: ruleset
+    # (no GitHub Rulesets equivalent) ...`), not a silently-ignored no-op.
+    # If your branch genuinely needs one of these five, it must use
+    # `enforcement: branch_protection` instead — see Example 1 above.
+
+# ------------------------------------------------------------------------------
+# Repository-level settings — separate from the per-branch rules above; these
+# are repo-wide toggles, not tied to any one branch. Checked and applied the
+# same way branches are (audit/plan/apply all cover this block too).
+# ------------------------------------------------------------------------------
+repo_settings:
+  # Automatically deletes a PR's head branch once the PR merges. Reduces
+  # stale-branch clutter; has no effect on branches with open PRs.
+  delete_branch_on_merge: true
+  # Allows a PR author (or anyone with push access to the PR branch) to
+  # click "Update branch" to merge the latest base-branch commits in,
+  # without needing push access to the base branch itself.
+  allow_update_branch: true
+  # Enables Dependabot alerts for vulnerable dependencies.
+  vulnerability_alerts: true
+  # Enables Dependabot automated security-fix pull requests. Requires
+  # `vulnerability_alerts: true` to also be declared `true` in this same
+  # file — GitHub rejects enabling this before Dependabot alerts are on,
+  # and repo-policy enforces that ordering at validate time, before any API
+  # call.
+  automated_security_fixes: true
+  # Lets a security researcher privately report a vulnerability to
+  # maintainers through GitHub, instead of only via a public issue.
+  private_vulnerability_reporting: true
+  # Scans pushed content for known secret-provider patterns (API keys,
+  # tokens, etc.) and flags matches.
+  secret_scanning: true
+  # Blocks a `git push` containing a detected secret before it ever lands in
+  # the repository's history, rather than only flagging it after the fact.
+  # Requires `secret_scanning: true` to also be declared `true` in this same
+  # file — GitHub rejects enabling push protection before secret scanning
+  # itself is on, enforced the same way as the automated_security_fixes
+  # pairing above.
+  secret_scanning_push_protection: true
+
+# ------------------------------------------------------------------------------
+# What this file does NOT, and cannot, control
+# ------------------------------------------------------------------------------
+# Two GitHub branch-protection capabilities have no field in repo-policy's v1
+# schema at all — not a bug, a documented scope boundary (ARCHITECTURE.md's
+# "Apply Safety Model"):
+#   1. GitHub's "Require branches to be up to date before merging" toggle
+#      (the status-check object's own `strict` field in GitHub's API).
+#   2. An arbitrary push-restriction allowlist (specific users/teams/apps
+#      permitted to push despite other restrictions) — `clear_restrictions`
+#      above can only clear an existing allowlist or leave it alone; it
+#      cannot declare a new one.
+# See ROADMAP.md for what's planned next, and its "Explicitly not doing"
+# section for capabilities that are deliberately out of scope for this tool.
