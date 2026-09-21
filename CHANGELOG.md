@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v0.4.9 (2026-09-21)
+
+### Bug Fixes
+
+- Advance local main to the merged commit before creating the GitHub release
+  ([`d55a55d`](https://github.com/shipsolid/repo-policy/commit/d55a55d2d9920ba1bdb3b2250120dc3dd2bfbe8b))
+
+The release job's checkout happens once, at the start, before the version-bump commit and
+  squash-merge. Nothing reconciled local main with the real merged commit before the
+  changelog/release-creation step, which needs local HEAD to have reached it. This fix resets local
+  main to the merged commit right before that step runs. v0.4.8's commit and tag are already live
+  and correct; that release never completed (no GitHub Release, no PyPI publish). This fix will
+  trigger its own release (v0.4.9) that supersedes the incomplete v0.4.8.
+
+
 ## v0.4.8 (2026-09-21)
 
 ### Bug Fixes
@@ -100,6 +115,9 @@ dependency-group: github-actions-dependencies ...
 Signed-off-by: dependabot[bot] <support@github.com>
 
 Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+
+- **release**: V0.4.8 [skip ci]
+  ([`b759aa4`](https://github.com/shipsolid/repo-policy/commit/b759aa479e6dbf0b45f0819301e7ad7117374a8b))
 
 - **release**: V1.0.0 [skip ci]
   ([`de59e98`](https://github.com/shipsolid/repo-policy/commit/de59e98ee5e45113f5f9ab3e94c4509201a01c3f))

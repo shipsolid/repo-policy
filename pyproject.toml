@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "repo-policy"
-version = "0.4.8"
+version = "0.4.9"
 description = "Lightweight, declarative repository governance for GitHub."
 readme = "README.md"
 license = "MIT"
