@@ -1,6 +1,113 @@
 # CHANGELOG
 
 
+## v0.4.8 (2026-09-21)
+
+### Bug Fixes
+
+- Don't report secret scanning as drifted when token can't see security_and_analysis
+  ([`21a156e`](https://github.com/shipsolid/repo-policy/commit/21a156e5d65b769020a569a74bac1094aaccb59a))
+
+diff_security_and_analysis() collapsed two different GET /repos/{owner}/{repo} response shapes into
+  the same "disabled" reading: (1) the security_and_analysis block present but a sub-key
+  legitimately absent/off, and (2) the whole block missing because the authenticated token lacks
+  permission to see it. Case 2 was treated as "disabled" for diff purposes, producing a false
+  positive on the live self-audit.
+
+diff_security_and_analysis now returns (changes, unavailable_field_names) instead of just a list of
+  changes -- when the whole block is absent, every declared field routes to `unavailable` rather
+  than being diffed as False, mirroring the existing diff_toggle/private_vulnerability_reporting
+  pattern. Behavior is unchanged when the block is present but a sub-key is absent -- that still
+  means "disabled" and still produces a real Change.
+
+### Chores
+
+- Revert erroneous v1.0.0 version bump back to 0.4.7
+  ([`240da00`](https://github.com/shipsolid/repo-policy/commit/240da00920083105d79c0927c2d0d29f9ec8c509))
+
+The release pipeline's version-computation step computed 1.0.0 instead of the correct 0.4.8 for a
+  patch-level release, and that wrong version landed on main before the pipeline failed at a later
+  step. Root cause (a python-semantic-release version mismatch between two steps of release.yml) is
+  being fixed separately. Nothing was ever published externally under 1.0.0 -- no PyPI release, no
+  GitHub Release entry. The erroneous v1.0.0/v1 tags have been deleted.
+
+- Revert second erroneous v1.0.0 bump and finish the PSR pinning fix
+  ([`86420bc`](https://github.com/shipsolid/repo-policy/commit/86420bcd54f92dbf8d99a76fa73fea22ce51a05e))
+
+Fixes the root cause of a live incident (twice): release.yml's version-bump step ran
+  python-semantic-release via a SHA-pinned GitHub Action, but the SHA pins the Action's own code,
+  not the PSR package version its Dockerfile installs. It installed 10.6.2 instead of 9.21.2,
+  computing 1.0.0 instead of 0.4.8. All three PSR invocations in release.yml now pin 9.21.2
+  explicitly via pip, and the version-bump step now sets GIT_COMMIT_AUTHOR explicitly (PSR overrides
+  host git config for committer identity). Both errant v1.0.0/v1 tag pairs have been deleted from
+  origin.
+
+- **deps**: Bump the github-actions-dependencies group across 1 directory with 5 updates
+  ([#3](https://github.com/shipsolid/repo-policy/pull/3),
+  [`d99b109`](https://github.com/shipsolid/repo-policy/commit/d99b109b73b13cd500c575d904529d9fffeaa1b2))
+
+Bumps the github-actions-dependencies group with 5 updates in the / directory:
+
+| Package | From | To | | --- | --- | --- | |
+  [actions/checkout](https://github.com/actions/checkout) | `4.4.0` | `7.0.1` | |
+  [actions/setup-python](https://github.com/actions/setup-python) | `5.6.0` | `7.0.0` | |
+  [actions/upload-artifact](https://github.com/actions/upload-artifact) | `4.6.2` | `7.0.1` | |
+  [actions/download-artifact](https://github.com/actions/download-artifact) | `4.3.0` | `8.0.1` | |
+  [python-semantic-release/python-semantic-release](https://github.com/python-semantic-release/python-semantic-release)
+  | `9.21.2` | `10.6.2` |
+
+Updates `actions/checkout` from 4.4.0 to 7.0.1 - [Release
+  notes](https://github.com/actions/checkout/releases) -
+  [Changelog](https://github.com/actions/checkout/blob/main/CHANGELOG.md) -
+  [Commits](https://github.com/actions/checkout/compare/11d5960a326750d5838078e36cf38b85af677262...3d3c42e5aac5ba805825da76410c181273ba90b1)
+
+Updates `actions/setup-python` from 5.6.0 to 7.0.0 - [Release
+  notes](https://github.com/actions/setup-python/releases) -
+  [Commits](https://github.com/actions/setup-python/compare/a26af69be951a213d495a4c3e4e4022e16d87065...5fda3b95a4ea91299a34e894583c3862153e4b97)
+
+Updates `actions/upload-artifact` from 4.6.2 to 7.0.1 - [Release
+  notes](https://github.com/actions/upload-artifact/releases) -
+  [Commits](https://github.com/actions/upload-artifact/compare/ea165f8d65b6e75b540449e92b4886f43607fa02...043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+
+Updates `actions/download-artifact` from 4.3.0 to 8.0.1 - [Release
+  notes](https://github.com/actions/download-artifact/releases) -
+  [Commits](https://github.com/actions/download-artifact/compare/d3f86a106a0bac45b974a628896c90dbdf5c8093...3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c)
+
+Updates `python-semantic-release/python-semantic-release` from 9.21.2 to 10.6.2 - [Release
+  notes](https://github.com/python-semantic-release/python-semantic-release/releases) -
+  [Changelog](https://github.com/python-semantic-release/python-semantic-release/blob/master/CHANGELOG.rst)
+  -
+  [Commits](https://github.com/python-semantic-release/python-semantic-release/compare/21ed7fa03e4a17ac49406eff4b60d5ad050fbdc2...9a026e9303981c866c3425723009becb2437c757)
+
+--- updated-dependencies: - dependency-name: actions/checkout dependency-version: 7.0.1
+
+dependency-type: direct:production
+
+update-type: version-update:semver-major
+
+dependency-group: github-actions-dependencies
+
+- dependency-name: actions/download-artifact dependency-version: 8.0.1
+
+- dependency-name: actions/setup-python dependency-version: 7.0.0
+
+- dependency-name: actions/upload-artifact dependency-version: 7.0.1
+
+- dependency-name: python-semantic-release/python-semantic-release dependency-version: 10.6.2
+
+dependency-group: github-actions-dependencies ...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+
+- **release**: V1.0.0 [skip ci]
+  ([`de59e98`](https://github.com/shipsolid/repo-policy/commit/de59e98ee5e45113f5f9ab3e94c4509201a01c3f))
+
+- **release**: V1.0.0 [skip ci]
+  ([`2171dd0`](https://github.com/shipsolid/repo-policy/commit/2171dd0db9dbdf558172d209c3fc86dbaf69b95a))
+
+
 ## v0.4.7 (2026-09-20)
 
 ### Bug Fixes
