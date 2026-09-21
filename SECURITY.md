@@ -376,17 +376,18 @@ anything ships. If it's ever necessary to undo a release that slipped through an
 - Every release tag is SSH-signed by a dedicated release-bot identity and verified
   (`git verify-tag`) before the floating major tag moves, the GitHub release is created, or
   anything is published to PyPI — publication fails closed if that verification doesn't pass. See
-  "Release Signing" above. **Not yet live** — see "Release Pipeline Setup Checklist" below for what
-  still needs to exist on GitHub before this protection is active.
+  "Release Signing" above. **Live since `v0.4.9`** — independently re-confirmed by directly
+  verifying `v0.4.9` and `v0.5.0`'s tag signatures against the published `RELEASE_BOT_SSH_PUBLIC_KEY`
+  repository variable.
 
-## Repository Settings Declared, Pending First `apply`
+## Repository Settings Declared in Policy, Confirmed Live
 
-The following GitHub repository-settings toggles (Settings → Code security) are now declared in
+The following GitHub repository-settings toggles (Settings → Code security) are declared in
 [`.github/repository-policy.yml`](.github/repository-policy.yml)'s `repo_settings` block
-(`secret_scanning: true`, `secret_scanning_push_protection: true`) but not yet live on
-`shipsolid/repo-policy` — they take effect the first time `repo-policy apply` runs against this
-repository, which has not happened yet (see README's "Self-governance"). Recorded here as an open
-action item, not silently skipped, until that first apply completes:
+(`secret_scanning: true`, `secret_scanning_push_protection: true`) and are live on
+`shipsolid/repo-policy` — confirmed directly via `gh api repos/shipsolid/repo-policy`, which reports
+`security_and_analysis.secret_scanning.status: "enabled"` and
+`secret_scanning_push_protection.status: "enabled"`:
 
 - **Secret scanning** — flags secrets matching known provider patterns that get committed to the
   repository.
@@ -397,18 +398,16 @@ action item, not silently skipped, until that first apply completes:
 Both are available on public repositories at no cost, and on private repositories with GitHub
 Advanced Security. `repo-policy` manages both through the REST API's `PATCH /repos/{owner}/{repo}`
 `security_and_analysis` field (see `github_client.py`'s `update_security_and_analysis`) — the same
-mechanism it uses for every other declared `repo_settings` toggle. Turning them on for
-`shipsolid/repo-policy` itself now requires running `repo-policy apply` with sufficient credentials
-(repository-admin / fine-grained `Administration: Read and write`), not a separate manual UI step.
+mechanism it uses for every other declared `repo_settings` toggle.
 
 ## Release Pipeline Setup Checklist (Task 10)
 
 `.github/workflows/release.yml` and `pyproject.toml` are already written for the design described in
-"Release Signing" above and in `docs/ci-cd.md`. Items 2–4 below are now **provisioned** (the token,
-signing key, and public key exist and are stored correctly); the remaining items are either
-unconfirmed or are new pre-flight checks a later review added. This is the exhaustive list of what
-needs to be true before the first live release under this design; everything below is a live-repo
-state check or admin action outside what a code change can do on its own (same pattern as
+"Release Signing" above and in `docs/ci-cd.md`. Items 2–7 below are now confirmed **provisioned or
+live**; only item 1's email-verification sub-bullet and item 8 remain not independently confirmable
+through this repository's own API surface (see each item below for why). This is the exhaustive list
+of what needs to be true before the first live release under this design; everything below is a
+live-repo state check or admin action outside what a code change can do on its own (same pattern as
 `POLICY_AUDIT_TOKEN` above).
 
 1. **The `shipsolid-release-bot` GitHub account** (already created per the dispatch that produced
@@ -416,8 +415,12 @@ state check or admin action outside what a code change can do on its own (same p
    - Add `amitsingh007s+repopolicybot@gmail.com` as a **verified** email on the account — SSH
      signature verification checks the signing commit/tag's committer email against a verified
      email on the account that owns the registered signing key, so an unverified email means every
-     release shows as unverified on GitHub even with a technically-valid signature. *(Not confirmed
-     — verify before the first live release.)*
+     release shows as unverified on GitHub even with a technically-valid signature. **Strong
+     indirect confirmation, not independently verifiable via API**: `git verify-tag` on `v0.4.9` and
+     `v0.5.0` both return a valid "Good signature," and GitHub's own web UI has shown both tags as
+     `Verified` — but another account's email-verification status isn't exposed through this
+     repository's API surface, so first-hand confirmation still requires whoever administers the
+     `shipsolid-release-bot` account (GitHub Settings → Emails).
    - Add the bot's SSH **public** key under Settings → SSH and GPG keys → New SSH key, with key type
      set to **Signing Key** (not "Authentication Key" — the two are registered separately on GitHub
      and only a Signing Key is checked against commit/tag signatures). **Done** — the bot's public
@@ -427,8 +430,9 @@ state check or admin action outside what a code change can do on its own (same p
      merge PRs that already satisfy branch protection's requirements (approvals: 0, `required`
      green); it never touches branch protection/ruleset settings itself, so Admin would be
      unnecessary standing privilege on a repository that specifically avoids granting exactly that
-     kind of unnecessary standing privilege (see this file's Threat Model). *(Not confirmed — verify
-     before the first live release.)*
+     kind of unnecessary standing privilege (see this file's Threat Model). **Done** — confirmed
+     live (`gh api repos/shipsolid/repo-policy/collaborators/shipsolid-release-bot/permission` →
+     `"write"`).
 2. **`RELEASE_BOT_TOKEN`** — a **classic** personal access token, not fine-grained, issued from the
    bot's own account (not the human owner's), scoped to `public_repo` only (this repository is
    currently public). Classic, not fine-grained, because fine-grained PATs can only be issued by an
@@ -455,10 +459,9 @@ state check or admin action outside what a code change can do on its own (same p
    as secrets scoped to it:
    - Add a **required reviewers** protection rule naming the repository owner (or whoever should
      approve releases) — this is the human-in-the-loop gate from brief Step 2; every real release
-     pauses here for a manual approval click before the `release` job's first step runs. *(Not
-     confirmed — verify this rule is actually configured, not just that the environment exists,
-     before the first live release: without it, the two secrets above are exposed to the `release`
-     job with no approval gate at all.)*
+     pauses here for a manual approval click before the `release` job's first step runs. **Done** —
+     confirmed live (`gh api repos/shipsolid/repo-policy/environments` shows the `release`
+     environment with a `required_reviewers` protection rule already configured).
    - Recommended, not required: restrict the environment's allowed deployment branches to `main` —
      `release.yml`'s only trigger is already `push: branches: [main]`, so this is defense in depth,
      not a functional requirement.
@@ -467,27 +470,33 @@ state check or admin action outside what a code change can do on its own (same p
    in `.github/repository-policy.yml` declares or detects this setting (it's a merge-method toggle,
    not something `repo-policy` models), so its absence wouldn't surface as a clear error — it would
    show up only as the merge-retry loop's 30-minute timeout, with a "not mergeable" message that
-   looks identical to "required hasn't finished yet."
+   looks identical to "required hasn't finished yet." **Done** — confirmed live
+   (`gh api repos/shipsolid/repo-policy --jq '.allow_squash_merge'` → `true`).
 7. **Confirm no out-of-band tag-protection rule exists** for `refs/tags/*` on the live repository
    (Settings → Tags, Settings → Rules) that could block the release-bot's direct tag push. This
    repo's own self-policy declares neither a classic tag-protection rule nor a tag-scoped Ruleset
    (see docs/ci-cd.md's "Tag protection vs. branch protection" research), but that only covers what
    `repo-policy` itself manages — it can't rule out something added by hand outside `repo-policy`.
+   **Done** — confirmed live (`gh api repos/shipsolid/repo-policy/tags/protection` → `404`, no rule).
 8. **Confirm `required` actually reports as that exact status-check context** on a real
    bot-authored PR before relying on it for the first live release. This design's merge-retry loop
    (see `release.yml`'s "Wait for the PR's required check and squash-merge it" step) entirely depends
    on GitHub evaluating mergeability against that exact context name; if the release-bot's PR ever
    produces a differently-named or missing check for any reason, every release attempt will time out
    at 30 minutes with a misleading "not mergeable yet" message rather than a clear "wrong check name"
-   error. This is a live-repo verification step for whoever runs the first real release, not
-   something re-checked here.
+   error. **Demonstrated in practice, not re-verified via a fresh `gh api` check this session**: the
+   `v0.4.9` and `v0.5.0` releases both completed through this exact merge-retry loop (see
+   `docs/release-readiness-v1.md`'s Step 9), so the `required` context name has been confirmed
+   correct at least twice in production.
 
-Whatever in items 1, 5, 6, 7, and 8 above isn't yet true, `release.yml`'s `release` job will either
-fail to start, fail on first use of a missing/misconfigured piece, or — the more insidious case for
-items 6–8 — run for the full 30-minute merge-retry window before failing with a timeout message that
-doesn't point at the real cause. All of these are safe failure modes (no release ships), just not
-always a *fast* one; confirming items 6–8 before the first live release attempt avoids burning that
-timeout on a problem the retry loop was never going to be able to solve.
+Items 2–7 above are now confirmed provisioned or live. The one item that can't be independently
+confirmed through this repository's own API surface is item 1's email-verification sub-bullet —
+whoever administers the `shipsolid-release-bot` account can close that out directly (GitHub
+Settings → Emails). If it, or item 8's `required` context-name assumption, were ever not true,
+`release.yml`'s `release` job would either fail to start, fail on first use of a missing/
+misconfigured piece, or — for item 8 — run for the full 30-minute merge-retry window before failing
+with a timeout message that doesn't point at the real cause. Both are safe failure modes (no release
+ships), just not always a *fast* one.
 
 ## Emergency Recovery
 

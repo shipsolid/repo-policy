@@ -34,7 +34,7 @@ planned later, unscheduled.
 | 18  | ✅     | Partial-apply journaling                      | Line-by-line record of exactly what succeeded before a mutation failure, so re-running is always safe.                                                                                    |
 | 19  | ✅     | Proxy / SOCKS support                         | Honors `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`, including `socks5`/`socks5h` schemes, out of the box.                                                                           |
 | 20  | ✅     | Self-governance                               | This repository audits its own branch protection daily, using its own tool (`.github/workflows/policy-audit.yml`).                                                                        |
-| 21  | 🚧     | Signed, verifiable release tags               | SSH-signed annotated release tags via a dedicated release-bot identity; code-complete, pending final live-repo setup (see [SECURITY.md](SECURITY.md)'s Release Pipeline Setup Checklist). |
+| 21  | ✅     | Signed, verifiable release tags               | SSH-signed annotated release tags via a dedicated release-bot identity; live since `v0.4.9` — every release tag is verified (`git verify-tag`) before the floating major tag moves or anything publishes (see [SECURITY.md](SECURITY.md)'s Release Signing). |
 | 22  | 🔜     | CODEOWNERS / multi-maintainer ownership       | Blocked on a second regular contributor joining the project.                                                                                                                              |
 | 23  | 💡     | Org-wide policy inheritance                   | A default policy that an org's repositories inherit unless explicitly overridden.                                                                                                         |
 | 24  | 💡     | Multi-repository orchestration                | `repo-policy apply` across a list of repositories in a single invocation.                                                                                                                 |
@@ -213,13 +213,17 @@ and repo security settings, and
 [`.github/workflows/policy-audit.yml`](.github/workflows/policy-audit.yml) runs `repo-policy audit`
 against it on a daily schedule, on every change to the policy file or that workflow, and on demand.
 
-- The audit workflow is read-only (`mode: audit`) and needs a `POLICY_AUDIT_TOKEN` repository secret
-  — a fine-grained PAT scoped to this repository only, with `Administration: Read`. That secret does
-  not exist yet; creating it is a live-repo setup step for whoever holds admin access.
-- `.github/repository-policy.yml` documents the _intended_ branch protection for this repository —
-  it has not yet been applied. Until `repo-policy apply` runs against the live repository (a manual,
-  reviewed step — see [SECURITY.md](SECURITY.md)'s Threat Model for why `apply` is never run
-  unattended against a real repo from an untrusted trigger), it does not reflect live GitHub state.
+- The audit workflow is read-only (`mode: audit`) and authenticates with a `POLICY_AUDIT_TOKEN`
+  repository secret — a fine-grained PAT scoped to this repository only, with `Administration: Read`.
+  That secret is provisioned.
+- `.github/repository-policy.yml`'s declared branch protection and repo security settings are live
+  on `shipsolid/repo-policy` — confirmed by comparing `gh api` branch-protection/`security_and_analysis`
+  output directly against the policy file, field by field, and by running `repo-policy audit --config
+  .github/repository-policy.yml` against the live repository, which reports compliant. The scheduled
+  `policy-audit.yml` workflow's own run history has not yet independently demonstrated this with its
+  production `POLICY_AUDIT_TOKEN`, though — check its run history before treating a red run there as
+  evidence of live drift rather than a possible token-scope artifact (open item, tracked alongside
+  this repository's own remediation backlog).
 - If a change to `main`'s required status check ever leaves it unable to produce a passing
   `required` result — blocking the very fix that would repair it — see SECURITY.md's "Emergency
   Recovery" for the documented, auditable bypass procedure.
