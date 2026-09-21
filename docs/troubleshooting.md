@@ -65,6 +65,18 @@ just set. Re-run `repo-policy plan` against the same config/repo to see exactly 
 still reported as drift, and `apply` again — if it doesn't converge after two attempts, treat it as
 a real bug and file an issue with both `plan` outputs attached.
 
+## `repo settings: delete_branch_on_merge unavailable on this repository` (exit code 1)
+
+The token can't see the field. `GET /repos/{owner}/{repo}` omits `delete_branch_on_merge` and
+`allow_update_branch` entirely for some token scopes (a fine-grained PAT with
+`Administration: Read-only` is one confirmed case), and repo-policy refuses to guess. Either drop
+the field from `repo_settings`, or use a token that returns it. Confirm what your token sees with:
+
+```bash
+curl -s -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/<owner>/<repo> \
+  | python3 -c "import sys, json; d = json.load(sys.stdin); print({k: d.get(k, '<ABSENT>') for k in ('delete_branch_on_merge', 'allow_update_branch')})"
+```
+
 ## `apply` exits 3 partway through, but the output shows some branches already applied
 
 This is `PartialApplyError`: one branch (or repo-setting) mutation failed partway through the same

@@ -305,3 +305,29 @@ def test_apply_repo_settings_raises_partial_apply_error_identifying_completed_an
     statuses = {entry.resource: entry.status for entry in exc_info.value.summary.journal}
     assert statuses["repo settings: vulnerability_alerts"] == "applied"
     assert statuses["repo settings: automated_security_fixes"] == "failed"
+
+
+def test_plan_repo_settings_records_flat_fields_unavailable_when_token_cannot_see_them():
+    client = MagicMock()
+    client.get_repo.return_value = {"full_name": "acme/widgets"}  # no flat keys at all
+    config = PolicyConfig(
+        version=1,
+        branches={},
+        repo_settings=RepoSettingsPolicy(delete_branch_on_merge=True, allow_update_branch=True),
+    )
+    result = plan_repo_settings(client, config)
+    assert result.changes == []
+    assert result.unavailable == ["delete_branch_on_merge", "allow_update_branch"]
+    assert result.compliant is False
+
+
+def test_apply_repo_settings_never_patches_flat_fields_it_cannot_see():
+    client = MagicMock()
+    client.get_repo.return_value = {}
+    config = PolicyConfig(
+        version=1, branches={}, repo_settings=RepoSettingsPolicy(delete_branch_on_merge=True)
+    )
+    result = apply_repo_settings(client, config)
+    client.update_repo_settings.assert_not_called()
+    assert result.applied is False
+    assert result.unavailable == ["delete_branch_on_merge"]

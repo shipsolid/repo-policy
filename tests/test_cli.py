@@ -728,3 +728,23 @@ def test_version_flag_prints_repo_policy_dunder_version_and_exits_0():
     assert result.exit_code == 0
     assert repo_policy.__version__ in result.output
     assert importlib.metadata.version("repo-policy") in result.output
+
+
+@patch("repo_policy.cli.GitHubClient")
+def test_audit_reports_flat_setting_unavailable_instead_of_false_drift(mock_client_cls, tmp_path):
+    """The bug behind every failed policy-audit.yml run up to 2026-09-21: a token that can't see
+    delete_branch_on_merge must produce an 'unavailable' line (still exit 1), never a
+    '+ False -> True' change."""
+    mock_client = mock_client_cls.return_value.__enter__.return_value
+    mock_client.get_repo.return_value = {"full_name": "acme/widgets"}
+    config_path = tmp_path / "policy.yml"
+    config_path.write_text(
+        "version: 1\nbranches: {}\nrepo_settings:\n  delete_branch_on_merge: true\n"
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["audit", "--config", str(config_path), "--repo", "acme/widgets", "--token", "t"]
+    )
+    assert result.exit_code == 1
+    assert "repo settings: delete_branch_on_merge unavailable on this repository" in result.output
+    assert "change(s) required" not in result.output

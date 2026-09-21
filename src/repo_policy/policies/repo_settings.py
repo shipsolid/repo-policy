@@ -27,15 +27,29 @@ def _classify(current_value: bool, desired_value: bool) -> RepoSettingAction:
     return "modify"
 
 
-def diff_flat_settings(current_repo: dict, desired: RepoSettingsPolicy) -> list[RepoSettingChange]:
+def diff_flat_settings(
+    current_repo: dict, desired: RepoSettingsPolicy
+) -> tuple[list[RepoSettingChange], list[str]]:
     """delete_branch_on_merge / allow_update_branch -- both bare top-level booleans on the
-    GET /repos/{owner}/{repo} response, matched 1:1 by PATCH /repos/{owner}/{repo}."""
+    GET /repos/{owner}/{repo} response, matched 1:1 by PATCH /repos/{owner}/{repo}.
+
+    GitHub omits both keys entirely (not `null`, not `false`) when the authenticated token can't
+    see them -- live-confirmed 2026-09-21 on shipsolid/repo-policy: a fine-grained PAT with
+    Administration: Read-only gets a body with neither key, a classic `repo`-scope token gets
+    both as `true`. Reading an absent key as False produced a permanent false "add" on this
+    repository's own self-audit. Returns (changes, unavailable_field_names), the same contract as
+    diff_security_and_analysis below: a declared field whose key is absent routes to
+    `unavailable` instead of being diffed against a guessed value."""
     changes: list[RepoSettingChange] = []
+    unavailable: list[str] = []
     for field_name in _FLAT_FIELDS:
         desired_value = getattr(desired, field_name)
         if desired_value is None:
             continue  # not declared -- managed-scope: don't touch
-        current_value = bool(current_repo.get(field_name, False))
+        if field_name not in current_repo:
+            unavailable.append(field_name)
+            continue
+        current_value = bool(current_repo[field_name])
         if current_value != desired_value:
             changes.append(
                 RepoSettingChange(
@@ -45,7 +59,7 @@ def diff_flat_settings(current_repo: dict, desired: RepoSettingsPolicy) -> list[
                     _classify(current_value, desired_value),
                 )
             )
-    return changes
+    return changes, unavailable
 
 
 def to_flat_settings_payload(changes: list[RepoSettingChange]) -> dict:

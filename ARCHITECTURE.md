@@ -250,15 +250,23 @@ Two related outcomes are reported as messages, without their own exit code:
 
 ## Repo-Level Settings: the `unavailable` Outcome
 
-Two of the seven `repo_settings` fields can come back `unavailable` rather than `ok`/drifted:
-`secret_scanning`/`secret_scanning_push_protection` (422 = no GitHub Advanced Security license) and
-`private_vulnerability_reporting` (404 or 422 = repo not eligible, e.g. dependency graph disabled).
-`unavailable` is surfaced, not silently swallowed: `audit`/`plan` still set the drift exit code when
-a declared field comes back `unavailable` (even with no other drift), since a policy the operator
-declared isn't actually in effect — but `apply` reports it as a plain message rather than an error,
-since there's no API call left to retry or fail on. `GitHubClient._request` gained an `allow_422`
-parameter (mirroring the existing `allow_404`) specifically to make this distinguishable from a
-genuine API error.
+A declared `repo_settings` field comes back `unavailable` rather than `ok`/drifted whenever
+GitHub's answer is structurally undeterminable. Four cases exist today:
+
+| Field(s) | Signal | Meaning |
+| --- | --- | --- |
+| `secret_scanning`, `secret_scanning_push_protection` | `PATCH` returns 422 | no GitHub Advanced Security license on this repo |
+| `secret_scanning`, `secret_scanning_push_protection` | `security_and_analysis` block absent from `GET /repos/{owner}/{repo}` | the token cannot see the block (e.g. fine-grained `Administration: Read-only`) |
+| `delete_branch_on_merge`, `allow_update_branch` | key absent from `GET /repos/{owner}/{repo}` | the token cannot see the key -- same token class as above, live-confirmed 2026-09-21 |
+| `private_vulnerability_reporting` | `GET` returns 404 or 422 | repo not eligible, e.g. dependency graph disabled |
+
+`unavailable` is surfaced, not silently swallowed: `audit`/`plan` still set the drift exit code
+when a declared field comes back `unavailable` (even with no other drift), since a policy the
+operator declared isn't actually in effect -- but `apply` reports it as a plain message rather than
+an error, since there's no API call left to retry or fail on. An absent key is never read as
+`false`: guessing produced a false `+ False → True` on every run of this repository's own
+self-audit before the third row above existed. `GitHubClient._request`'s `allow_422` parameter
+(mirroring `allow_404`) is what makes the 422 cases distinguishable from a genuine API error.
 
 ## Failure Modes
 

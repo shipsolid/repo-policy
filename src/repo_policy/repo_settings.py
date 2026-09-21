@@ -42,7 +42,9 @@ def plan_repo_settings(client: GitHubClient, config: PolicyConfig) -> RepoSettin
 
     result = RepoSettingsResult()
     current_repo = client.get_repo()
-    result.changes.extend(diff_flat_settings(current_repo, desired))
+    flat_changes, flat_unavailable = diff_flat_settings(current_repo, desired)
+    result.changes.extend(flat_changes)
+    result.unavailable.extend(flat_unavailable)
     security_changes, security_unavailable = diff_security_and_analysis(current_repo, desired)
     result.changes.extend(security_changes)
     result.unavailable.extend(security_unavailable)
