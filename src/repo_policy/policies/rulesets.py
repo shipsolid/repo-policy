@@ -39,7 +39,9 @@ def from_api(data: dict | None) -> BranchPolicy:
         return BranchPolicy(
             enforcement="ruleset",
             pull_requests=pull_requests.from_ruleset_rule(rules_by_type.get("pull_request")),
-            status_checks=status_checks.from_ruleset_rule(rules_by_type.get("required_status_checks")),
+            status_checks=status_checks.from_ruleset_rule(
+                rules_by_type.get("required_status_checks")
+            ),
             signed_commits="required_signatures" in rules_by_type,
             linear_history="required_linear_history" in rules_by_type,
             allow_force_push="non_fast_forward" not in rules_by_type,
@@ -79,14 +81,22 @@ def metadata_changes(branch: str, data: dict | None) -> list[Change]:
     if enforcement != "active":
         changes.append(
             Change(
-                field="ruleset_enforcement", current_value=enforcement, desired_value="active", action="modify"
+                field="ruleset_enforcement",
+                current_value=enforcement,
+                desired_value="active",
+                action="modify",
             )
         )
 
     target = data.get("target")
     if target != "branch":
         changes.append(
-            Change(field="ruleset_target", current_value=target, desired_value="branch", action="modify")
+            Change(
+                field="ruleset_target",
+                current_value=target,
+                desired_value="branch",
+                action="modify",
+            )
         )
 
     own_ref = f"refs/heads/{branch}"
@@ -107,7 +117,10 @@ def metadata_changes(branch: str, data: dict | None) -> list[Change]:
     if bypass_actors:
         changes.append(
             Change(
-                field="ruleset_bypass_actors", current_value=bypass_actors, desired_value=[], action="modify"
+                field="ruleset_bypass_actors",
+                current_value=bypass_actors,
+                desired_value=[],
+                action="modify",
             )
         )
 

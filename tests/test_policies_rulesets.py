@@ -42,11 +42,19 @@ def test_metadata_changes_empty_for_an_already_canonical_ruleset():
         ({"target": "tag"}, "ruleset_target"),
         ({"conditions": {"ref_name": {"include": [], "exclude": []}}}, "ruleset_conditions"),
         (
-            {"conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": ["refs/heads/main"]}}},
+            {
+                "conditions": {
+                    "ref_name": {"include": ["refs/heads/main"], "exclude": ["refs/heads/main"]}
+                }
+            },
             "ruleset_conditions",
         ),
         (
-            {"bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]},
+            {
+                "bypass_actors": [
+                    {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}
+                ]
+            },
             "ruleset_bypass_actors",
         ),
     ],
@@ -83,7 +91,9 @@ def test_from_api_hardcodes_clear_restrictions_true():
 
 def test_from_api_none_means_fully_permissive():
     result = rulesets.from_api(None)
-    assert result.pull_requests == PullRequestPolicy(required=False, approvals=0, code_owner_review=False)
+    assert result.pull_requests == PullRequestPolicy(
+        required=False, approvals=0, code_owner_review=False
+    )
     assert result.status_checks is None
     assert result.signed_commits is False
     assert result.linear_history is False
@@ -94,13 +104,21 @@ def test_from_api_none_means_fully_permissive():
 def test_from_api_reads_rules_array():
     data = {
         "rules": [
-            {"type": "pull_request", "parameters": {"required_approving_review_count": 1, "require_code_owner_review": False}},
+            {
+                "type": "pull_request",
+                "parameters": {
+                    "required_approving_review_count": 1,
+                    "require_code_owner_review": False,
+                },
+            },
             {"type": "required_signatures"},
             {"type": "non_fast_forward"},
         ]
     }
     result = rulesets.from_api(data)
-    assert result.pull_requests == PullRequestPolicy(required=True, approvals=1, code_owner_review=False)
+    assert result.pull_requests == PullRequestPolicy(
+        required=True, approvals=1, code_owner_review=False
+    )
     assert result.signed_commits is True
     assert result.linear_history is False
     assert result.allow_force_push is False
@@ -120,7 +138,10 @@ def test_from_api_wraps_validation_error_as_policy_resolution_error():
         "rules": [
             {
                 "type": "pull_request",
-                "parameters": {"required_approving_review_count": 7, "require_code_owner_review": False},
+                "parameters": {
+                    "required_approving_review_count": 7,
+                    "require_code_owner_review": False,
+                },
             }
         ]
     }
@@ -220,7 +241,9 @@ def test_to_api_payload_clears_conditions_exclude_even_when_current_has_some():
     )
     current_raw = {
         "id": 7,
-        "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": ["refs/heads/main-bot"]}},
+        "conditions": {
+            "ref_name": {"include": ["refs/heads/main"], "exclude": ["refs/heads/main-bot"]}
+        },
         "rules": [],
     }
     payload = rulesets.to_api_payload("main", resolved, current_raw=current_raw)
@@ -238,7 +261,9 @@ def test_to_api_payload_drops_extra_current_includes_even_when_present():
     )
     current_raw = {
         "id": 7,
-        "conditions": {"ref_name": {"include": ["refs/heads/main", "refs/heads/release/*"], "exclude": []}},
+        "conditions": {
+            "ref_name": {"include": ["refs/heads/main", "refs/heads/release/*"], "exclude": []}
+        },
         "rules": [],
     }
     payload = rulesets.to_api_payload("main", resolved, current_raw=current_raw)

@@ -32,7 +32,9 @@ def to_branch_protection(policy: PullRequestPolicy, current: dict | None = None)
         refs = cast(dict, _actor_refs(dismissal_restrictions))  # non-None: input was checked above
         payload["dismissal_restrictions"] = {"users": refs["users"], "teams": refs["teams"]}
     if current.get("bypass_pull_request_allowances") is not None:
-        payload["bypass_pull_request_allowances"] = _actor_refs(current["bypass_pull_request_allowances"])
+        payload["bypass_pull_request_allowances"] = _actor_refs(
+            current["bypass_pull_request_allowances"]
+        )
     return payload
 
 

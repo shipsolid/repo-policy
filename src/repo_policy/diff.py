@@ -21,6 +21,7 @@ class PolicyResolutionError(Exception):
     from current while declaring lock_branch=False) -- model_copy() doesn't re-validate, so this
     is what actually catches it before the invalid combination reaches the GitHub API."""
 
+
 # _FIELDS/_SCHEMA_DEFAULTS/_INVERTED_FIELDS are all derived from models.FIELD_SPECS (the single
 # source of truth for these per-field facts) rather than hand-typed -- see FieldSpec's docstring
 # for why that consolidation matters. status_checks' permissive default is None, not
@@ -59,7 +60,9 @@ def resolve_desired(desired: BranchPolicy, current: BranchPolicy, *, strict: boo
     resolved: dict[str, Any] = {}
     for field in _FIELDS:
         if field == "pull_requests":
-            resolved[field] = _merge_pull_requests(desired.pull_requests, current.pull_requests, strict=strict)
+            resolved[field] = _merge_pull_requests(
+                desired.pull_requests, current.pull_requests, strict=strict
+            )
             continue
         value = getattr(desired, field)
         if value is not None:

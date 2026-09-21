@@ -15,7 +15,14 @@ def test_repo_settings_result_compliant_when_no_changes_and_nothing_unavailable(
 
 def test_repo_settings_result_not_compliant_when_changes_exist():
     result = RepoSettingsResult(
-        changes=[RepoSettingChange(field="delete_branch_on_merge", current_value=False, desired_value=True, action="modify")]
+        changes=[
+            RepoSettingChange(
+                field="delete_branch_on_merge",
+                current_value=False,
+                desired_value=True,
+                action="modify",
+            )
+        ]
     )
     assert result.compliant is False
 
@@ -75,7 +82,9 @@ def test_plan_repo_settings_detects_vulnerability_alerts_drift():
     client = MagicMock()
     client.get_repo.return_value = {}
     client.get_vulnerability_alerts.return_value = False
-    config = PolicyConfig(version=1, branches={}, repo_settings=RepoSettingsPolicy(vulnerability_alerts=True))
+    config = PolicyConfig(
+        version=1, branches={}, repo_settings=RepoSettingsPolicy(vulnerability_alerts=True)
+    )
     result = plan_repo_settings(client, config)
     assert len(result.changes) == 1
     assert result.changes[0].field == "vulnerability_alerts"
@@ -85,7 +94,9 @@ def test_apply_repo_settings_enables_vulnerability_alerts():
     client = MagicMock()
     client.get_repo.return_value = {}
     client.get_vulnerability_alerts.return_value = False
-    config = PolicyConfig(version=1, branches={}, repo_settings=RepoSettingsPolicy(vulnerability_alerts=True))
+    config = PolicyConfig(
+        version=1, branches={}, repo_settings=RepoSettingsPolicy(vulnerability_alerts=True)
+    )
     result = apply_repo_settings(client, config)
     assert result.applied is True
     client.enable_vulnerability_alerts.assert_called_once()
@@ -95,7 +106,9 @@ def test_apply_repo_settings_disables_vulnerability_alerts():
     client = MagicMock()
     client.get_repo.return_value = {}
     client.get_vulnerability_alerts.return_value = True
-    config = PolicyConfig(version=1, branches={}, repo_settings=RepoSettingsPolicy(vulnerability_alerts=False))
+    config = PolicyConfig(
+        version=1, branches={}, repo_settings=RepoSettingsPolicy(vulnerability_alerts=False)
+    )
     result = apply_repo_settings(client, config)
     assert result.applied is True
     client.disable_vulnerability_alerts.assert_called_once()
@@ -121,7 +134,9 @@ def test_apply_repo_settings_disables_private_vulnerability_reporting():
     client.get_private_vulnerability_reporting.return_value = True
     client.disable_private_vulnerability_reporting.return_value = True
     config = PolicyConfig(
-        version=1, branches={}, repo_settings=RepoSettingsPolicy(private_vulnerability_reporting=False)
+        version=1,
+        branches={},
+        repo_settings=RepoSettingsPolicy(private_vulnerability_reporting=False),
     )
     result = apply_repo_settings(client, config)
     assert result.applied is True
@@ -133,7 +148,11 @@ def test_plan_repo_settings_records_unavailable_when_pvr_ineligible():
     client = MagicMock()
     client.get_repo.return_value = {}
     client.get_private_vulnerability_reporting.return_value = None
-    config = PolicyConfig(version=1, branches={}, repo_settings=RepoSettingsPolicy(private_vulnerability_reporting=True))
+    config = PolicyConfig(
+        version=1,
+        branches={},
+        repo_settings=RepoSettingsPolicy(private_vulnerability_reporting=True),
+    )
     result = plan_repo_settings(client, config)
     assert result.changes == []
     assert result.unavailable == ["private_vulnerability_reporting"]
@@ -144,15 +163,23 @@ def test_apply_repo_settings_records_unavailable_when_enable_hits_422():
     client.get_repo.return_value = {}
     client.get_private_vulnerability_reporting.return_value = False
     client.enable_private_vulnerability_reporting.return_value = False
-    config = PolicyConfig(version=1, branches={}, repo_settings=RepoSettingsPolicy(private_vulnerability_reporting=True))
+    config = PolicyConfig(
+        version=1,
+        branches={},
+        repo_settings=RepoSettingsPolicy(private_vulnerability_reporting=True),
+    )
     result = apply_repo_settings(client, config)
     assert "private_vulnerability_reporting" in result.unavailable
 
 
 def test_plan_repo_settings_detects_secret_scanning_drift():
     client = MagicMock()
-    client.get_repo.return_value = {"security_and_analysis": {"secret_scanning": {"status": "disabled"}}}
-    config = PolicyConfig(version=1, branches={}, repo_settings=RepoSettingsPolicy(secret_scanning=True))
+    client.get_repo.return_value = {
+        "security_and_analysis": {"secret_scanning": {"status": "disabled"}}
+    }
+    config = PolicyConfig(
+        version=1, branches={}, repo_settings=RepoSettingsPolicy(secret_scanning=True)
+    )
     result = plan_repo_settings(client, config)
     assert len(result.changes) == 1
     assert result.changes[0].field == "secret_scanning"
@@ -160,9 +187,13 @@ def test_plan_repo_settings_detects_secret_scanning_drift():
 
 def test_apply_repo_settings_records_unavailable_when_ghas_not_licensed():
     client = MagicMock()
-    client.get_repo.return_value = {"security_and_analysis": {"secret_scanning": {"status": "disabled"}}}
+    client.get_repo.return_value = {
+        "security_and_analysis": {"secret_scanning": {"status": "disabled"}}
+    }
     client.update_security_and_analysis.return_value = None
-    config = PolicyConfig(version=1, branches={}, repo_settings=RepoSettingsPolicy(secret_scanning=True))
+    config = PolicyConfig(
+        version=1, branches={}, repo_settings=RepoSettingsPolicy(secret_scanning=True)
+    )
     result = apply_repo_settings(client, config)
     assert result.unavailable == ["secret_scanning"]
     assert result.applied is False
@@ -178,8 +209,11 @@ def test_apply_repo_settings_records_both_fields_unavailable_together():
     }
     client.update_security_and_analysis.return_value = None
     config = PolicyConfig(
-        version=1, branches={},
-        repo_settings=RepoSettingsPolicy(secret_scanning=True, secret_scanning_push_protection=True),
+        version=1,
+        branches={},
+        repo_settings=RepoSettingsPolicy(
+            secret_scanning=True, secret_scanning_push_protection=True
+        ),
     )
     result = apply_repo_settings(client, config)
     assert sorted(result.unavailable) == ["secret_scanning", "secret_scanning_push_protection"]
@@ -187,13 +221,21 @@ def test_apply_repo_settings_records_both_fields_unavailable_together():
 
 def test_apply_repo_settings_applies_secret_scanning_when_ghas_licensed():
     client = MagicMock()
-    client.get_repo.return_value = {"security_and_analysis": {"secret_scanning": {"status": "disabled"}}}
-    client.update_security_and_analysis.return_value = {"security_and_analysis": {"secret_scanning": {"status": "enabled"}}}
-    config = PolicyConfig(version=1, branches={}, repo_settings=RepoSettingsPolicy(secret_scanning=True))
+    client.get_repo.return_value = {
+        "security_and_analysis": {"secret_scanning": {"status": "disabled"}}
+    }
+    client.update_security_and_analysis.return_value = {
+        "security_and_analysis": {"secret_scanning": {"status": "enabled"}}
+    }
+    config = PolicyConfig(
+        version=1, branches={}, repo_settings=RepoSettingsPolicy(secret_scanning=True)
+    )
     result = apply_repo_settings(client, config)
     assert result.applied is True
     assert result.unavailable == []
-    client.update_security_and_analysis.assert_called_once_with({"secret_scanning": {"status": "enabled"}})
+    client.update_security_and_analysis.assert_called_once_with(
+        {"secret_scanning": {"status": "enabled"}}
+    )
 
 
 def test_apply_repo_settings_enables_alerts_before_security_fixes():
@@ -204,10 +246,15 @@ def test_apply_repo_settings_enables_alerts_before_security_fixes():
     client.get_repo.return_value = {}
     client.get_vulnerability_alerts.return_value = False
     client.get_automated_security_fixes.return_value = False
-    client.enable_vulnerability_alerts.side_effect = lambda: call_order.append("vulnerability_alerts")
-    client.enable_automated_security_fixes.side_effect = lambda: call_order.append("automated_security_fixes")
+    client.enable_vulnerability_alerts.side_effect = lambda: call_order.append(
+        "vulnerability_alerts"
+    )
+    client.enable_automated_security_fixes.side_effect = lambda: call_order.append(
+        "automated_security_fixes"
+    )
     config = PolicyConfig(
-        version=1, branches={},
+        version=1,
+        branches={},
         repo_settings=RepoSettingsPolicy(vulnerability_alerts=True, automated_security_fixes=True),
     )
     apply_repo_settings(client, config)
@@ -225,7 +272,8 @@ def test_apply_repo_settings_raises_partial_apply_error_identifying_completed_an
     client.get_automated_security_fixes.return_value = False
     client.enable_automated_security_fixes.side_effect = GitHubAPIError("boom", status_code=500)
     config = PolicyConfig(
-        version=1, branches={},
+        version=1,
+        branches={},
         repo_settings=RepoSettingsPolicy(vulnerability_alerts=True, automated_security_fixes=True),
     )
 

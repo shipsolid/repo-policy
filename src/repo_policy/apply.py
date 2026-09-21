@@ -143,7 +143,9 @@ def _branch_changes(
     return changes + _ruleset_effectiveness_changes(client, branch, ruleset_id)
 
 
-def _ruleset_effectiveness_changes(client: GitHubClient, branch: str, ruleset_id: int) -> list[Change]:
+def _ruleset_effectiveness_changes(
+    client: GitHubClient, branch: str, ruleset_id: int
+) -> list[Change]:
     """When this fires, apply_branch's "repair" is a best-effort re-PUT of the exact same already-
     canonical payload -- there's no metadata field left to correct, since metadata_changes() (the
     only thing that would have given apply something concrete to fix) already reported nothing.
@@ -166,7 +168,11 @@ def _ruleset_effectiveness_changes(client: GitHubClient, branch: str, ruleset_id
 
 
 def _plan_branch_full(
-    client: GitHubClient, config: PolicyConfig, branch: str, *, rulesets_cache: list[dict] | None = None
+    client: GitHubClient,
+    config: PolicyConfig,
+    branch: str,
+    *,
+    rulesets_cache: list[dict] | None = None,
 ) -> PlannedBranch:
     """The full read+resolve+diff pass for one branch, performing no write -- the shared preflight
     step behind apply_branch's single-branch path and apply_all's mutation loop. plan_branch
@@ -184,13 +190,19 @@ def _plan_branch_full(
 
 
 def plan_branch(
-    client: GitHubClient, config: PolicyConfig, branch: str, *, rulesets_cache: list[dict] | None = None
+    client: GitHubClient,
+    config: PolicyConfig,
+    branch: str,
+    *,
+    rulesets_cache: list[dict] | None = None,
 ) -> tuple[list[Change], BranchPolicy]:
     planned = _plan_branch_full(client, config, branch, rulesets_cache=rulesets_cache)
     return planned.changes, planned.resolved
 
 
-def _mutate_planned_branch(client: GitHubClient, config: PolicyConfig, planned: PlannedBranch) -> None:
+def _mutate_planned_branch(
+    client: GitHubClient, config: PolicyConfig, planned: PlannedBranch
+) -> None:
     """The single write implied by planned.changes -- unchanged from apply_branch's original
     inline mutation block (branch-protection PUT, or ruleset create/update), only relocated so
     apply_branch's single-branch path and apply_all's mutation loop can share it instead of
@@ -202,7 +214,9 @@ def _mutate_planned_branch(client: GitHubClient, config: PolicyConfig, planned: 
         if any(change.field == "signed_commits" for change in planned.changes):
             client.set_required_signatures(planned.branch, bool(planned.resolved.signed_commits))
     else:
-        payload = rulesets.to_api_payload(planned.branch, planned.resolved, current_raw=planned.current_raw)
+        payload = rulesets.to_api_payload(
+            planned.branch, planned.resolved, current_raw=planned.current_raw
+        )
         if planned.ruleset_id is None:
             client.create_ruleset(payload)
         else:
@@ -210,7 +224,11 @@ def _mutate_planned_branch(client: GitHubClient, config: PolicyConfig, planned: 
 
 
 def apply_branch(
-    client: GitHubClient, config: PolicyConfig, branch: str, *, rulesets_cache: list[dict] | None = None
+    client: GitHubClient,
+    config: PolicyConfig,
+    branch: str,
+    *,
+    rulesets_cache: list[dict] | None = None,
 ) -> BranchResult:
     """Single-branch plan-then-mutate, unchanged in behavior and calling contract from before this
     task -- it self-detects stale classic branch protection inline (not via apply_all's preflight)
@@ -302,7 +320,8 @@ def find_orphaned_ruleset_names(config: PolicyConfig, all_rulesets: list[dict]) 
     return [
         summary["name"]
         for summary in all_rulesets
-        if summary["name"].startswith("repo-policy:") and summary["name"] not in declared_ruleset_names
+        if summary["name"].startswith("repo-policy:")
+        and summary["name"] not in declared_ruleset_names
     ]
 
 

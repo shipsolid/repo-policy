@@ -51,6 +51,33 @@ recently removed from the config, and whether `strict` is set at the top level (
 default to every branch unless overridden). This never touches a ruleset that isn't named
 `repo-policy:*`.
 
+## `apply completed but policy is not converged` (exit code 1)
+
+Every mutation `apply` attempted succeeded (or none were needed), but the independent, fresh
+re-check it runs immediately afterward (`cli.verify_after_apply`) still finds drift, or a declared
+`repo_settings` field still comes back `unavailable`. This is not a partial failure — nothing
+raised — it means GitHub's own state doesn't match what the mutation calls' 2xx responses implied
+it would. Common causes: a declared field GitHub silently ignores or resets under a specific
+combination (see `docs/test-strategy.md`'s "What mocking alone could not catch" for real examples
+of this), eventual-consistency lag on GitHub's effective-rules view for a just-updated ruleset (a
+second `apply` often resolves this on its own), or an org-level policy overriding what repo-policy
+just set. Re-run `repo-policy plan` against the same config/repo to see exactly which field(s) are
+still reported as drift, and `apply` again — if it doesn't converge after two attempts, treat it as
+a real bug and file an issue with both `plan` outputs attached.
+
+## `apply` exits 3 partway through, but the output shows some branches already applied
+
+This is `PartialApplyError`: one branch (or repo-setting) mutation failed partway through the same
+`apply` run's mutation phase — zero or more earlier resources in that phase may already have been
+mutated successfully before it. The printed journal lines (`<resource>: applied N
+change(s)` / `<resource>: no changes needed` / `<resource>: failed -- N change(s) not applied`) are
+the ground truth for what happened before the failure — nothing before the failed line was rolled
+back, since repo-policy has no transaction concept across resources (each branch/repo-setting
+mutation is its own independent API call). Read the accompanying error message for the underlying
+`GitHubAPIError` (rate limiting, a transient 5xx, a permissions gap partway through a token's scope)
+and re-run `apply` once it's addressed — an already-applied resource simply reports zero further
+changes needed on the next run (see ARCHITECTURE.md's "Apply Outcomes and Exit Codes").
+
 ## `could not initialize GitHub client: ...` (exit code 2)
 
 `repo-policy` sits behind an `httpx.Client`, which honors the standard proxy environment

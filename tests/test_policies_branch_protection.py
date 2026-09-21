@@ -7,7 +7,9 @@ from repo_policy.policies import branch_protection
 
 def test_from_api_none_means_fully_permissive():
     result = branch_protection.from_api(None, signed_commits=False)
-    assert result.pull_requests == PullRequestPolicy(required=False, approvals=0, code_owner_review=False)
+    assert result.pull_requests == PullRequestPolicy(
+        required=False, approvals=0, code_owner_review=False
+    )
     assert result.status_checks is None
     assert result.signed_commits is False
     assert result.linear_history is False
@@ -18,7 +20,10 @@ def test_from_api_none_means_fully_permissive():
 
 def test_from_api_reads_wrapped_booleans():
     data = {
-        "required_pull_request_reviews": {"required_approving_review_count": 2, "require_code_owner_reviews": True},
+        "required_pull_request_reviews": {
+            "required_approving_review_count": 2,
+            "require_code_owner_reviews": True,
+        },
         "required_status_checks": {"contexts": ["build"], "checks": []},
         "required_linear_history": {"enabled": True},
         "allow_force_pushes": {"enabled": False},
@@ -26,7 +31,9 @@ def test_from_api_reads_wrapped_booleans():
         "enforce_admins": {"enabled": True},
     }
     result = branch_protection.from_api(data, signed_commits=True)
-    assert result.pull_requests == PullRequestPolicy(required=True, approvals=2, code_owner_review=True)
+    assert result.pull_requests == PullRequestPolicy(
+        required=True, approvals=2, code_owner_review=True
+    )
     assert result.status_checks == StatusChecksPolicy(required=["build"])
     assert result.linear_history is True
     assert result.allow_force_push is False
@@ -105,7 +112,11 @@ def test_to_api_payload_preserves_restrictions_from_current_state():
         enforce_admins=False,
     )
     payload = branch_protection.to_api_payload(resolved, current_raw=current_raw)
-    assert payload["restrictions"] == {"users": ["octocat"], "teams": ["justice-league"], "apps": []}
+    assert payload["restrictions"] == {
+        "users": ["octocat"],
+        "teams": ["justice-league"],
+        "apps": [],
+    }
 
 
 def test_from_api_none_means_clear_restrictions_true():
@@ -161,8 +172,12 @@ def test_to_api_payload_writes_enforce_admins_from_resolved_policy():
         allow_deletion=True,
         enforce_admins=True,
     )
-    payload = branch_protection.to_api_payload(resolved, current_raw={"enforce_admins": {"enabled": False}})
-    assert payload["enforce_admins"] is True  # resolved wins, current_raw is ignored for this field now
+    payload = branch_protection.to_api_payload(
+        resolved, current_raw={"enforce_admins": {"enabled": False}}
+    )
+    assert (
+        payload["enforce_admins"] is True
+    )  # resolved wins, current_raw is ignored for this field now
 
 
 def test_to_api_payload_writes_required_conversation_resolution():

@@ -15,15 +15,74 @@ verification). The job split, `workflow_call` gating, and permission scoping des
 new in this revision and are pending their first live run — see this repository's audit-remediation
 plan (Task 6) for the local `zizmor` verification performed instead.
 
+### Pipeline flow: gating and permission separation
+
+```
+push to main
+     │
+     ├─────────────────────────────────┐
+     ▼                                  ▼
+ ci.yml (direct trigger)          release.yml
+ contents: read                        │
+ -> "required" status check            ├─ ci  (workflow_call -> re-runs ci.yml's job graph)
+    (what branch protection            │      contents: read
+    requires to merge any PR)          │
+                                        ├─ check-release-warranted  (no environment: gate)
+                                        │      contents: read -- dry-run
+                                        │      `semantic-release --strict version --print-tag`,
+                                        │      zero commit/tag/push side effects
+                                        │
+                                        ▼  (only if ci passed AND a release is warranted)
+                              ┌─────────────────────────────┐
+                              │ release                     │  <- environment: release
+                              │ contents: read (default     │     requires a human's approval
+                              │ token); real writes via     │     click before this job's first
+                              │ secrets.RELEASE_BOT_TOKEN   │     step runs -- RELEASE_BOT_TOKEN /
+                              │ (environment secret)        │     RELEASE_BOT_SIGNING_KEY only
+                              └──────────────┬──────────────┘     materialize on the runner then
+                                             │  version bump -> signed local commit+tag ->
+                                             │  release-bot PR -> squash-merge -> push signed
+                                             │  tag -> `git verify-tag` (fails closed if the
+                                             │  tag isn't verifiably signed)
+                              ┌──────────────┼──────────────┐
+                              ▼                              ▼
+                        publish                          sbom
+                        id-token: write only        contents: read, id-token: write,
+                        (OIDC -> PyPI trusted        attestations: write
+                        publishing; never                  │  CycloneDX SBOMs (wheel install +
+                        checks out the repo)               │  Docker image), Sigstore-backed
+                                                            │  attestations (wheel, sdist, both
+                                                            │  SBOMs, Docker image by digest)
+                                                            ▼
+                                                     release-assets
+                                                     contents: write only (no checkout, no
+                                                     id-token) -- attaches the two SBOM files to
+                                                     the GitHub release `release` already created
+```
+
+No job ever holds both `contents: write` and `id-token: write` at once — see "Permission scoping
+and concurrency" below for why that split specifically matters for PyPI trusted publishing's
+security model, and "SBOM and provenance" for why `sbom`/`release-assets` are two jobs, not one.
+
 ### CI job graph
 
-`ci.yml` splits what used to be one `test` job into five independent jobs — `lint` (`ruff check`),
-`typecheck` (`mypy`), `test` (`pytest`), `build` (`python -m build`, package-validation), and
-`security` (`zizmor --pedantic --offline` against this repo's own workflow YAML) — plus a final
-`required` job that `needs:` all five and fails if any of them failed, were cancelled, or were
-skipped. `required` exists purely to give branch protection and Release a single stable status
-name, `CI / required`, that doesn't change as jobs are added or removed. Each job declares its own
-minimal `permissions:` (`contents: read`); the workflow-level default is `permissions: {}`.
+`ci.yml` splits what used to be one `test` job into nine independent jobs: `lint` (`ruff check` +
+`ruff format --check`), `typecheck` (`mypy`), `test` (`pytest --cov-fail-under=95`, matrixed over
+every Python version `repo-policy` claims to support, 3.10–3.14), `build` (`python -m build`,
+package-validation, and the source of the `dist/` artifact every downstream job reuses),
+`wheel-smoke` (Task 12: installs the actual built wheel — no dev extras, no editable install — into
+clean 3.10 and 3.14 interpreters and smoke-tests the installed CLI), `security` (`zizmor --pedantic
+--offline` against this repo's own workflow YAML), `validate-self-policy` (Task 9: catches a
+malformed `.github/repository-policy.yml` at PR time, before `policy-audit.yml`'s next scheduled
+run would), `verify-action-lock` (Task 7: regenerates `requirements-action.txt`'s hash lock and
+byte-compares it against the checked-in file), and `docker` (Task 7: two clean `--no-cache` builds
+of the Action image, an inventory diff between them, a smoke-test battery against the built image,
+and a Trivy vulnerability scan) — plus a final `required` job that `needs:` all nine and fails if
+any of them failed, were cancelled, or were skipped. `required` exists purely to give branch
+protection and Release a single stable status name, `required`, that doesn't change as jobs
+are added or removed. Each of the other nine jobs declares its own minimal `permissions:`
+(`contents: read`); `required` itself needs no permissions (it only evaluates its dependencies'
+outcomes) and declares `permissions: {}`. The workflow-level default is also `permissions: {}`.
 
 `security` here is narrowly scoped to this repo's own workflow files — it is not dependency
 scanning. `pip-audit`, CodeQL, and a scheduled `security.yml` were the separate, later addition
@@ -53,7 +112,7 @@ cross-run SHA to validate.
 **Trade-off accepted:** because `ci.yml` keeps its own direct `push: branches: [main]` trigger (so
 `main` still gets an independent CI signal even if `release.yml` is ever broken or disabled) *and*
 `release.yml` calls `ci.yml` again as a reusable workflow, every push to `main` runs the CI job
-graph twice — once producing the standalone `CI / required` check, once nested under `Release / ci`
+graph twice — once producing the standalone `required` check, once nested under `Release / ci`
 gating the release. This is deliberate: reliability of "is `main` green" outweighs the modest extra
 compute for a repository this size. A real release now runs it a third time too — see below.
 
@@ -183,7 +242,7 @@ version-bump commit's own push from re-triggering `ci.yml`/`release.yml`. GitHub
 are evaluated against "the commit that contains the skip instructions" for **both** `push` and
 `pull_request` events — including "the HEAD commit of a pull request." If the release-bot's local
 commit still carried `[skip ci]` when pushed to its branch and opened as a PR, `ci.yml`'s
-`pull_request` trigger would be skipped too, `CI / required` would never appear on the PR, and the
+`pull_request` trigger would be skipped too, `required` would never appear on the PR, and the
 merge — which this pipeline waits on that exact check for — would hang forever. So `commit_message`
 in `pyproject.toml` dropped `[skip ci]` entirely, and it's added back only in the squash-merge's own
 subject (`gh pr merge --subject "chore(release): ${TAG} [skip ci]"`), so only the commit that
@@ -195,14 +254,14 @@ new to release and no-op) but wasteful, and it would demand a second, redundant 
 on the `release` environment for no real release.
 
 **Waiting for the merge to become possible, without reading check status directly:** the alternative
-design — poll `gh pr checks --required --watch` until `CI / required` reports success, then merge —
+design — poll `gh pr checks --required --watch` until `required` reports success, then merge —
 would work fine with the token this pipeline actually uses: `RELEASE_BOT_TOKEN` is a **classic** PAT
 (see SECURITY.md's "Secrets Management" and setup checklist for why classic, not fine-grained —
 fine-grained PATs can't be issued by an account that's only an outside collaborator on a
 personal-account-owned repo), and classic PATs can call the Checks API without restriction. So the
 retry-loop design below is a deliberate choice on its own merits, not a workaround forced by a
 permission gap: `release.yml` retries a **plain `gh pr merge`** on a 15-second interval, relying on
-GitHub evaluating mergeability — including whether `CI / required` has actually passed — server-side,
+GitHub evaluating mergeability — including whether `required` has actually passed — server-side,
 from the repository's own branch-protection state, independent of whatever the calling token can
 itself read. That's a simpler dependency to reason about than a separate check-status poll, and it
 happens to also sidestep a real, separate constraint should this project ever migrate `RELEASE_BOT_TOKEN`
@@ -212,7 +271,7 @@ permissions reference — there is no selectable "Checks" repository permission 
 the closest options, "Actions" and the legacy "Commit statuses," don't reliably cover the check-run
 rollup a merge decision actually depends on, per multiple GitHub community reports). A "not mergeable
 yet" failure is the expected, retriable state while CI is still running on the PR; the loop is
-bounded (`deadline`/30 minutes) so a genuinely broken `CI / required` (or any other permanent merge
+bounded (`deadline`/30 minutes) so a genuinely broken `required` (or any other permanent merge
 blocker) fails the release job loudly instead of blocking the `release-main` concurrency queue
 indefinitely, at the cost of a slower failure than a check-status-aware wait would give for that
 specific case. The loop also classifies a handful of `gh pr merge` failure messages (grounded in
@@ -276,7 +335,7 @@ deleted on merge by the repository's own `delete_branch_on_merge: true` self-pol
 6. The release-bot pushes a `release-bot/v{version}` branch and opens a pull request into `main`.
 7. The workflow retries `gh pr merge --squash` against that PR (skipping straight through if a
    previous, timed-out run already merged it) until GitHub's own server-side mergeability check
-   passes — which depends on the PR's `CI / required` — or a genuinely non-retriable failure (a real
+   passes — which depends on the PR's `required` — or a genuinely non-retriable failure (a real
    merge conflict, a stale base branch) is detected and fails fast instead of waiting out the full
    30-minute budget. `[skip ci]` is added to the squash commit's own message (not present earlier —
    see "Why `[skip ci]` moved..." above) so the merge doesn't re-trigger this same workflow. It then

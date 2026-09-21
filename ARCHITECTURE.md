@@ -110,22 +110,33 @@ can't drift between "branch protection" and "ruleset" mode.
 
 ## Sequence: `repo-policy apply` (one ruleset-enforced branch)
 
+Three phases — preflight (read-only), mutate, verify — see "Apply Outcomes and Exit Codes" below
+for the full breakdown and how each phase maps to an exit code.
+
 ```
 CLI            config.py       apply.py                     github_client.py       GitHub API
  │  apply         │                │                              │                    │
  │───load_policy─▶│                │                              │                    │
  │◀──PolicyConfig─│                │                              │                    │
- │───────────────── apply_all(client, config) ───────────────────▶│                    │
- │                │           prefetch_rulesets() ─────────────────▶ list_rulesets() ──▶│ GET /rulesets
- │                │                │                              │◀──── 200, [...] ───│
- │                │           fetch_current(branch) ────────────────▶ find_ruleset_by_name()
- │                │                │                              │   (uses the prefetched list —
- │                │                │                              │    no extra GET per branch)
- │                │           resolve_desired() + diff() — empty? skip API call, done
- │                │                │                              │
- │                │           (non-empty) to_api_payload() ─────────▶ update_ruleset() ───▶│ PUT /rulesets/{id}
- │                │                │                              │◀──────── 200 ─────────│
- │◀─────────────────── BranchResult(applied=True) ─────────────────│                    │
+ │───────────────── apply_all(client, config) ───────────────────▶│                    │  ┐
+ │                │           prefetch_rulesets() ─────────────────▶ list_rulesets() ──▶│  │ preflight
+ │                │                │                              │◀──── 200, [...] ───│  │ (read-only,
+ │                │           fetch_current(branch) ────────────────▶ find_ruleset_by_name()  every branch
+ │                │                │                              │   (uses the prefetched list  planned
+ │                │                │                              │    no extra GET per branch)  before any
+ │                │           resolve_desired() + diff() — empty? skip API call, done            write)
+ │                │                │                              │                    │  ┘
+ │                │           (non-empty) to_api_payload() ─────────▶ update_ruleset() ───▶│ PUT /rulesets/{id}  ┐ mutate
+ │                │                │  (always rebuilds target/enforcement/conditions/    │◀──────── 200 ───────│ (one call
+ │                │                │   bypass_actors to their canonical shape — see       │                    │  per branch
+ │                │                │   "Owned-Ruleset Invariants" below)                  │                    │  that
+ │◀─────────────────── ApplySummary(journal=[applied]) ──────────────│                    │                    ┘  changed)
+ │                │                │                              │                    │
+ │────────────── verify_after_apply(client, config) ────────────────▶│                    │  ┐ verify
+ │                │           audit_all() + plan_repo_settings() — a fresh, independent   │  │ (re-fetch from
+ │                │           re-fetch (no rulesets-cache reuse: the mutation above may    │  │  scratch, not a
+ │                │           have just created/updated/pruned them)                       │  │  re-read of the
+ │◀────── zero drift/unavailable? exit 0  :  drift or unavailable remains? exit 1 ─────────│  ┘  2xx responses)
 ```
 
 ## Integration Architecture
@@ -165,6 +176,77 @@ does not persist state outside the process it runs in.
   of silently reporting the branch compliant, but removing the stale protection is still a manual,
   GitHub-side action. The reverse direction (`ruleset` → `branch_protection`) is fully automatic,
   per the strict-mode bullet above.
+
+## Owned-Ruleset Invariants (ADR 0004)
+
+Every ruleset repo-policy creates or manages for a branch under `enforcement: ruleset` is named
+exactly `repo-policy:{branch}` (`policies/rulesets.ruleset_name`) — ownership is proven entirely by
+that name, not a state file (`docs/adrs/0004-*`). Because the name alone is the ownership marker,
+`rulesets.to_api_payload()` treats every metadata field on a ruleset with that name as fully owned
+and always rebuilds it to one canonical shape, regardless of whatever currently sits on GitHub:
+
+- `target: branch`
+- `enforcement: active` — never `disabled`/`evaluate`
+- `conditions.ref_name`: `include: ["refs/heads/{branch}"]` exactly, `exclude: []` — never a
+  broader or narrower scope
+- `bypass_actors: []` — always empty; repo-policy never declares or preserves a bypass actor on its
+  own rulesets
+
+`rulesets.metadata_changes()` is the read-side counterpart: it diffs a live `repo-policy:{branch}`
+ruleset's actual `enforcement`/`target`/`conditions`/`bypass_actors` against that canonical shape
+and reports drift on any deviation — a disabled ruleset, a widened branch condition, or an added
+bypass actor is never treated as a human's intentional customization to preserve, and the next
+`apply` corrects it. This closes the false-compliance gap a naming-only ownership model would
+otherwise have: a ruleset can look right in its *rule content* (the `pull_request`,
+`required_status_checks`, etc. rules `to_api_payload()` also builds) and still not be the shape
+repo-policy actually owns.
+
+## Apply Outcomes and Exit Codes
+
+`apply` runs in three phases (see the sequence diagram above), each backed by real code, not just
+convention:
+
+1. **Preflight (read-only).** `apply_all`'s `_plan_all_branches` reads and diffs every declared
+   branch (`apply.PlannedBranch`) before mutating any of them. A read/resolve failure here
+   (`GitHubAPIError`, `PolicyResolutionError`) aborts before any write is attempted — a planning
+   failure can never follow an earlier branch's write.
+2. **Mutate.** Only branches with a non-empty diff are mutated, one at a time, and every outcome —
+   `verified` (no-op), `applied`, or `failed` — is journaled as it happens
+   (`apply.ApplyJournalEntry`). If a mutation raises partway through, `PartialApplyError` carries
+   the `ApplySummary` built so far, so the branches that already succeeded are never lost to an
+   uncaught exception; the CLI prints that journal before exiting. `apply_repo_settings` follows the
+   same journal-then-raise pattern for the `repo_settings` block.
+3. **Verify.** Once mutations complete without raising, `cli.verify_after_apply` re-runs the exact
+   same read-only engine `audit`/`plan` use (`audit_all` + `plan_repo_settings`) — a fully
+   independent, fresh re-fetch of live state, not a re-read of the mutation calls' own responses —
+   before deciding the apply actually succeeded. A 2xx response from a PUT/PATCH is never trusted by
+   itself as proof a policy took effect.
+
+| Outcome | Exit code |
+|---|---|
+| Nothing needed to change (already compliant), or every needed mutation succeeded and the post-apply verification confirms zero drift | `0` |
+| Every mutation succeeded (or none were needed), but the post-apply verification still finds drift or a declared repo setting still comes back `unavailable` — printed as `apply completed but policy is not converged` | `1` |
+| `policy.yml` failed to load or validate, or a setup failure occurred before any API call was attempted (missing token, unresolvable `--repo`, malformed `owner/name`, or a `GitHubClient` construction failure such as a proxy misconfiguration) | `2` |
+| A `PolicyResolutionError` propagated — this fires *after* a successful read, not before one: either GitHub's current live state for a branch was internally inconsistent and couldn't be parsed (`rulesets.from_api`/`branch_protection.from_api`), or merging a declared policy against that current state (`diff.resolve_desired`) produced a combination `BranchPolicy`'s own validators reject. A fully valid, schema-correct `policy.yml` can still hit this | `2` |
+| A `GitHubAPIError` propagated (network/auth/transport error), or a `PartialApplyError` was raised because a mutation failed partway through an apply's mutation phase — zero or more earlier resources in that same phase may already have been mutated successfully before the failure | `3` |
+
+This mapping — `0` success/compliant, `1` drift or post-apply noncompliance, `2` invalid
+config/setup, `3` API/auth/transport/partial-application failure — is shared by `audit`, `plan`, and
+`apply` alike (`cli.py`'s `EXIT_OK`/`EXIT_DRIFT`/`EXIT_CONFIG_ERROR`/`EXIT_API_ERROR` constants); a
+CI pipeline branching on `repo-policy`'s exit code can rely on it staying stable across releases.
+
+Two related outcomes are reported as messages, without their own exit code:
+
+- **Stale classic branch protection** (`apply.detect_stale_branch_protection`) — a branch declared
+  `enforcement: ruleset` that still has a classic branch-protection object on GitHub, most likely
+  left over from a prior `enforcement: branch_protection` policy. repo-policy never deletes it
+  automatically (no ownership marker distinguishes it from something a human configured by hand);
+  see "Apply Safety Model" above ("Detected but not auto-fixed").
+- **`unavailable` repo settings** (e.g. `secret_scanning` with no GitHub Advanced Security license)
+  — `audit`/`plan` still report drift (exit `1`) when a declared field comes back `unavailable`,
+  since the declared policy isn't actually in effect; `apply` prints it as a plain message rather
+  than an error, since there is no API call left to retry or fail on (see "Repo-Level Settings: the
+  `unavailable` Outcome" below).
 
 ## Repo-Level Settings: the `unavailable` Outcome
 

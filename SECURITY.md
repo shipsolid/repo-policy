@@ -28,6 +28,7 @@ integration` on branch protection/ruleset endpoints, regardless of what the work
 | Malicious `policy.yml` in a fork's PR, run via `pull_request_target` | Attacker-controlled config gets a privileged token via workflow misconfiguration | Same blast radius as PAT compromise above | Never run repo-policy's `apply` mode on `pull_request_target` against untrusted input; `audit`/`plan` read-only are lower risk but still exercise real API calls with the token |
 | Naming collision: something else creates a ruleset named `repo-policy:<branch>` | `strict` mode's prune logic would treat it as repo-policy-owned and could delete it | Loss of an unrelated ruleset | The naming convention is a documented hard constraint (see `docs/adrs/0004-*`) — don't create rulesets with that prefix outside repo-policy |
 | Attacker who obtains `RELEASE_BOT_TOKEN` or `RELEASE_BOT_SIGNING_KEY` (Task 10) | Open/merge an arbitrary release PR as the release-bot, or forge a signature that verifies as the bot's identity | A malicious, signature-"verified" release published under the bot's name | Both live only as secrets scoped to the protected `release` GitHub Environment (required-reviewer approval, not a plain repository secret) — see "Release Signing" below; `RELEASE_BOT_TOKEN` is a **classic** PAT (not fine-grained — see "Secrets Management" below for why) scoped to `public_repo` only, the narrowest classic scope GitHub offers, issued from the `shipsolid-release-bot` account rather than the human owner's; `public_repo` is coarser than a fine-grained PAT's separately-toggled permissions would have been, but still never full `repo` scope, and the bot's own collaborator access is Write, not Admin, so it can't touch branch protection/ruleset settings even with the token in hand |
+| A consumer pins their workflow to the floating `@v0` Action tag | A compromised or buggy release becomes live in every consuming workflow the moment it's published, with no corresponding diff in the consumer's own repository to review or hold back | Unreviewed supply-chain exposure on every release, for any consumer who chose the moving tag | Documented as a deliberate trade-off, not hidden: README's GitHub Action section leads with the immutable full-commit-SHA form and calls out `@v0` explicitly as movable and unsuitable wherever change control requires a pinned dependency — the same full-SHA-pinning convention this repository's own workflows follow for every third-party Action *they* consume (every third-party `uses:` in `.github/workflows/*.yml` is pinned to a full commit SHA, not a tag — same-repository references like `ci.yml`'s own reusable-workflow call are a separate case; see `docs/ci-cd.md`). Consumers who need the convenience of automatic updates accept this exposure knowingly, as a choice, not a documentation gap |
 
 ## Authentication
 
@@ -35,6 +36,23 @@ repo-policy authenticates to the GitHub REST API with a single bearer token, res
 from `--token`, `GITHUB_TOKEN`, then `GH_TOKEN` (`cli._resolve_token`). There is no OAuth flow, no
 session, and no credential caching — the token lives only in the process's memory for the
 duration of one invocation.
+
+## Network Path: Proxy Support
+
+`repo-policy`'s `httpx.Client` (`github_client.py`) is constructed with `httpx`'s own defaults —
+`trust_env` is not overridden — so it honors the standard `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/
+`NO_PROXY` environment variables exactly like any other well-behaved `httpx`/`requests`-based tool;
+`socks5://`/`socks5h://` proxy URLs also work, since `httpx[socks]` ships as a hard dependency (see
+`docs/troubleshooting.md` for the corresponding config-error behavior when SOCKS support is
+missing from a mirrored install). This means every request — including the `Authorization: Bearer
+<token>` header — is routed through whatever proxy your environment configures, the same as any
+other HTTPS client running in that environment: an ordinary forward proxy using `CONNECT` tunneling
+never sees inside the TLS session (the token stays opaque to it), but an organization that
+terminates/inspects TLS at its proxy (a corporate MITM proxy with an injected root CA) can observe
+everything a normal HTTPS request carries, including this token. This is standard behavior for any
+HTTPS client, not something specific to how `repo-policy` handles the token — but it's worth stating
+explicitly here since it changes where the token is actually exposed in a given network topology,
+which is relevant to the token-scoping guidance above.
 
 ## Authorization
 
@@ -82,7 +100,7 @@ restrict itself to a subset. This is why token scoping (above) is the primary co
   possible: fine-grained PATs currently cannot call the Checks API at all (confirmed against GitHub's
   own fine-grained-PAT permissions reference — there is no selectable "Checks" repository
   permission). Relying instead on GitHub's own server-side mergeability evaluation (which checks
-  `CI / required` using the repository's branch-protection state, not the caller's token scope) is
+  `required` using the repository's branch-protection state, not the caller's token scope) is
   simply a simpler dependency — see `docs/ci-cd.md` for the full design reasoning. Stored as a secret
   on the protected `release` GitHub Environment, not as a repository secret, so it's only
   materialized on the runner after a human approves that environment's required-reviewer gate.
@@ -394,7 +412,7 @@ state check or admin action outside what a code change can do on its own (same p
      key is registered as a Signing Key on its account.
    - Confirm the bot's collaborator permission level on `shipsolid/repo-policy` is **Write**, not
      Admin. Write is sufficient — `RELEASE_BOT_TOKEN` only needs to push branches, open PRs, and
-     merge PRs that already satisfy branch protection's requirements (approvals: 0, `CI / required`
+     merge PRs that already satisfy branch protection's requirements (approvals: 0, `required`
      green); it never touches branch protection/ruleset settings itself, so Admin would be
      unnecessary standing privilege on a repository that specifically avoids granting exactly that
      kind of unnecessary standing privilege (see this file's Threat Model). *(Not confirmed — verify
@@ -437,13 +455,13 @@ state check or admin action outside what a code change can do on its own (same p
    in `.github/repository-policy.yml` declares or detects this setting (it's a merge-method toggle,
    not something `repo-policy` models), so its absence wouldn't surface as a clear error — it would
    show up only as the merge-retry loop's 30-minute timeout, with a "not mergeable" message that
-   looks identical to "CI / required hasn't finished yet."
+   looks identical to "required hasn't finished yet."
 7. **Confirm no out-of-band tag-protection rule exists** for `refs/tags/*` on the live repository
    (Settings → Tags, Settings → Rules) that could block the release-bot's direct tag push. This
    repo's own self-policy declares neither a classic tag-protection rule nor a tag-scoped Ruleset
    (see docs/ci-cd.md's "Tag protection vs. branch protection" research), but that only covers what
    `repo-policy` itself manages — it can't rule out something added by hand outside `repo-policy`.
-8. **Confirm `CI / required` actually reports as that exact status-check context** on a real
+8. **Confirm `required` actually reports as that exact status-check context** on a real
    bot-authored PR before relying on it for the first live release. This design's merge-retry loop
    (see `release.yml`'s "Wait for the PR's required check and squash-merge it" step) entirely depends
    on GitHub evaluating mergeability against that exact context name; if the release-bot's PR ever
@@ -462,7 +480,7 @@ timeout on a problem the retry loop was never going to be able to solve.
 ## Emergency Recovery
 
 `.github/repository-policy.yml` declares `main` with `enforce_admins: true` — nobody, including
-the repository owner, is exempted from requiring a passing `CI / required` status check to merge —
+the repository owner, is exempted from requiring a passing `required` status check to merge —
 and `clear_restrictions: true`, which resets any push-restriction allowlist GitHub might already
 hold for the branch. That second field is a narrower guarantee than "no bypass actors": it does
 not touch `bypass_pull_request_allowances`, a separate GitHub setting that lets specific actors
@@ -470,7 +488,7 @@ skip required PR-approval counts, which `repo-policy` reads through from whateve
 on GitHub rather than clearing (`src/repo_policy/policies/pull_requests.py`) — a human-set
 allowance there would silently survive every `apply`. This combination is deliberate (see Threat
 Model above), but it creates one failure mode this policy cannot resolve on its own: if
-`CI / required` itself becomes permanently unable to pass — a broken step in `ci.yml`, an
+`required` itself becomes permanently unable to pass — a broken step in `ci.yml`, an
 expired/revoked pinned Action, a GitHub Actions outage — no PR can merge, including the PR that
 would fix the breakage.
 
@@ -478,12 +496,12 @@ There is no policy field for "allow a bypass under condition X"; recovering from
 audited, time-boxed repository-settings change, not something `repo-policy` itself performs:
 
 1. **Confirm the required check is actually broken**, not just failing correctly on real
-   problems — re-run the `CI / required` job and read its logs before touching branch protection.
+   problems — re-run the `required` job and read its logs before touching branch protection.
 2. **Temporarily relax the specific setting blocking the fix**, via the GitHub UI (Settings →
    Branches → the `main` protection rule) or the REST API's branch-protection endpoint — e.g.
    unchecking "Require status checks to pass" or "Include administrators" just long enough to
-   merge the one PR that repairs `CI / required`. Change the minimum needed, not the whole rule.
-3. **Merge the fix**, confirm `CI / required` passes again on `main` from a fresh run (not the
+   merge the one PR that repairs `required`. Change the minimum needed, not the whole rule.
+3. **Merge the fix**, confirm `required` passes again on `main` from a fresh run (not the
    bypassed one).
 4. **Restore full protection immediately** — re-enable whatever was relaxed in step 2. Don't wait
    for `policy-audit.yml`'s next scheduled run to notice; confirm it yourself with

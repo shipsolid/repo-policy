@@ -24,7 +24,11 @@ def test_audit_all_reports_drift():
     client.get_required_signatures.return_value = False
     config = PolicyConfig(
         version=1,
-        branches={"main": BranchPolicy(pull_requests=PullRequestPolicy(required=True, approvals=1, code_owner_review=False))},
+        branches={
+            "main": BranchPolicy(
+                pull_requests=PullRequestPolicy(required=True, approvals=1, code_owner_review=False)
+            )
+        },
     )
     results, _orphaned_rulesets = audit_all(client, config)
     assert results[0].compliant is False
@@ -71,7 +75,11 @@ def _canonical_ruleset_raw(*, rules: list[dict] | None = None, **overrides) -> d
         {"enforcement": "evaluate"},
         {"target": "tag"},
         {"conditions": {"ref_name": {"include": [], "exclude": []}}},
-        {"bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]},
+        {
+            "bypass_actors": [
+                {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}
+            ]
+        },
     ],
 )
 def test_audit_all_reports_noncompliant_for_every_ineffective_ruleset_variant(raw_patch):
@@ -162,5 +170,7 @@ def test_detect_orphaned_rulesets_reuses_a_prefetched_list_without_a_new_call():
     client = MagicMock()
     prefetched = [{"id": 1, "name": "repo-policy:old-branch"}]
     config = PolicyConfig(version=1, strict=True, branches={})
-    assert detect_orphaned_rulesets(client, config, rulesets_cache=prefetched) == ["repo-policy:old-branch"]
+    assert detect_orphaned_rulesets(client, config, rulesets_cache=prefetched) == [
+        "repo-policy:old-branch"
+    ]
     client.list_rulesets.assert_not_called()

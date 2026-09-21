@@ -47,11 +47,15 @@ def plan_repo_settings(client: GitHubClient, config: PolicyConfig) -> RepoSettin
 
     if desired.vulnerability_alerts is not None:
         current = client.get_vulnerability_alerts()
-        result.changes.extend(diff_toggle("vulnerability_alerts", current, desired.vulnerability_alerts))
+        result.changes.extend(
+            diff_toggle("vulnerability_alerts", current, desired.vulnerability_alerts)
+        )
 
     if desired.automated_security_fixes is not None:
         current = client.get_automated_security_fixes()
-        result.changes.extend(diff_toggle("automated_security_fixes", current, desired.automated_security_fixes))
+        result.changes.extend(
+            diff_toggle("automated_security_fixes", current, desired.automated_security_fixes)
+        )
 
     if desired.private_vulnerability_reporting is not None:
         current_pvr = client.get_private_vulnerability_reporting()
@@ -59,7 +63,11 @@ def plan_repo_settings(client: GitHubClient, config: PolicyConfig) -> RepoSettin
             result.unavailable.append("private_vulnerability_reporting")
         else:
             result.changes.extend(
-                diff_toggle("private_vulnerability_reporting", current_pvr, desired.private_vulnerability_reporting)
+                diff_toggle(
+                    "private_vulnerability_reporting",
+                    current_pvr,
+                    desired.private_vulnerability_reporting,
+                )
             )
 
     return result
@@ -87,7 +95,9 @@ def apply_repo_settings(client: GitHubClient, config: PolicyConfig) -> RepoSetti
             mutate()
         except GitHubAPIError as exc:
             journal.append(
-                ApplyJournalEntry(resource=f"repo settings: {resource}", changes=changes, status="failed")
+                ApplyJournalEntry(
+                    resource=f"repo settings: {resource}", changes=changes, status="failed"
+                )
             )
             raise PartialApplyError(
                 ApplySummary(journal=list(journal), unavailable=list(result.unavailable)), exc
@@ -113,12 +123,16 @@ def apply_repo_settings(client: GitHubClient, config: PolicyConfig) -> RepoSetti
     if security_changes:
 
         def _apply_security_and_analysis() -> None:
-            outcome = client.update_security_and_analysis(to_security_and_analysis_payload(security_changes))
+            outcome = client.update_security_and_analysis(
+                to_security_and_analysis_payload(security_changes)
+            )
             if outcome is None:
                 result.unavailable.extend(sorted({c.field for c in security_changes}))
 
         _mutate_and_journal(
-            ", ".join(c.field for c in security_changes), security_changes, _apply_security_and_analysis
+            ", ".join(c.field for c in security_changes),
+            security_changes,
+            _apply_security_and_analysis,
         )
 
     changed_fields = {c.field for c in result.changes}
@@ -141,7 +155,9 @@ def apply_repo_settings(client: GitHubClient, config: PolicyConfig) -> RepoSetti
             if desired.automated_security_fixes
             else client.disable_automated_security_fixes
         )
-        _mutate_and_journal("automated_security_fixes", _changes_for("automated_security_fixes"), mutate)
+        _mutate_and_journal(
+            "automated_security_fixes", _changes_for("automated_security_fixes"), mutate
+        )
 
     if "private_vulnerability_reporting" in changed_fields:
 
@@ -155,7 +171,9 @@ def apply_repo_settings(client: GitHubClient, config: PolicyConfig) -> RepoSetti
                 result.unavailable.append("private_vulnerability_reporting")
 
         _mutate_and_journal(
-            "private_vulnerability_reporting", _changes_for("private_vulnerability_reporting"), _apply_pvr
+            "private_vulnerability_reporting",
+            _changes_for("private_vulnerability_reporting"),
+            _apply_pvr,
         )
 
     result.applied = any(change.field not in result.unavailable for change in result.changes)

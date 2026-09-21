@@ -100,7 +100,9 @@ def test_plan_branch_reports_ruleset_metadata_drift_even_when_rule_content_match
     """A disabled ruleset whose rule content already matches policy.yml must not report zero
     drift -- that's the exact false-compliance gap Task 1 closes."""
     client = MagicMock()
-    raw = _canonical_ruleset_raw(rules=[{"type": "required_linear_history"}], enforcement="disabled")
+    raw = _canonical_ruleset_raw(
+        rules=[{"type": "required_linear_history"}], enforcement="disabled"
+    )
     client.find_ruleset_by_name.return_value = raw
     config = _config(enforcement="ruleset", linear_history=True)
     changes, _resolved = plan_branch(client, config, "main")
@@ -113,7 +115,9 @@ def test_apply_branch_updates_ruleset_for_metadata_only_drift():
     disabled -- metadata-only drift must still trigger update_ruleset(), not the `if not changes`
     early return that a purely field-level diff would take."""
     client = MagicMock()
-    raw = _canonical_ruleset_raw(rules=[{"type": "required_linear_history"}], enforcement="disabled")
+    raw = _canonical_ruleset_raw(
+        rules=[{"type": "required_linear_history"}], enforcement="disabled"
+    )
     client.find_ruleset_by_name.return_value = raw
     config = _config(enforcement="ruleset", linear_history=True)
     result = apply_branch(client, config, "main")
@@ -131,7 +135,11 @@ def test_plan_branch_reports_ruleset_effectiveness_drift_when_ruleset_contribute
     raw = _canonical_ruleset_raw(rules=[{"type": "required_linear_history"}])
     client.find_ruleset_by_name.return_value = raw
     client.get_rules_for_branch.return_value = [
-        {"type": "required_linear_history", "ruleset_id": 999, "ruleset_source_type": "Organization"}
+        {
+            "type": "required_linear_history",
+            "ruleset_id": 999,
+            "ruleset_source_type": "Organization",
+        }
     ]
     config = _config(enforcement="ruleset", linear_history=True)
     changes, _resolved = plan_branch(client, config, "main")
@@ -182,7 +190,9 @@ def test_prune_rulesets_deletes_only_orphaned_repo_policy_rulesets():
         {"id": 2, "name": "repo-policy:old-branch"},
         {"id": 3, "name": "someone-elses-ruleset"},
     ]
-    config = _config(enforcement="ruleset")  # only "main" declared, still under enforcement: ruleset
+    config = _config(
+        enforcement="ruleset"
+    )  # only "main" declared, still under enforcement: ruleset
     deleted = prune_rulesets(client, config)
     assert deleted == ["repo-policy:old-branch"]
     client.delete_ruleset.assert_called_once_with(2)
@@ -283,7 +293,9 @@ def test_apply_twice_against_ineffective_ruleset_converges_to_zero_changes():
         "name": "repo-policy:main",
         "target": "branch",
         "enforcement": "disabled",
-        "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": ["refs/heads/main"]}},
+        "conditions": {
+            "ref_name": {"include": ["refs/heads/main"], "exclude": ["refs/heads/main"]}
+        },
         "rules": [{"type": "required_linear_history"}],
         "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}],
     }
@@ -297,7 +309,9 @@ def test_apply_twice_against_ineffective_ruleset_converges_to_zero_changes():
     ruleset_id, canonical_payload = client.update_ruleset.call_args.args
     assert ruleset_id == 7
     assert canonical_payload["enforcement"] == "active"
-    assert canonical_payload["conditions"] == {"ref_name": {"include": ["refs/heads/main"], "exclude": []}}
+    assert canonical_payload["conditions"] == {
+        "ref_name": {"include": ["refs/heads/main"], "exclude": []}
+    }
     assert canonical_payload["bypass_actors"] == []
 
     # Second pass: GitHub now reflects exactly what the first apply wrote, and its effective-rules
@@ -339,7 +353,11 @@ def test_apply_twice_against_effectiveness_only_drift_converges_to_zero_changes(
     # Metadata and rule content are already canonical -- only the effective-rules endpoint shows a
     # problem: some other ruleset (999), not this one (7), is what's actually active here.
     client.get_rules_for_branch.return_value = [
-        {"type": "required_linear_history", "ruleset_id": 999, "ruleset_source_type": "Organization"}
+        {
+            "type": "required_linear_history",
+            "ruleset_id": 999,
+            "ruleset_source_type": "Organization",
+        }
     ]
     config = _config(enforcement="ruleset", linear_history=True)
 

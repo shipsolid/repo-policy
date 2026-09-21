@@ -14,14 +14,18 @@ def from_api(data: dict | None, *, signed_commits: bool) -> BranchPolicy:
     try:
         return BranchPolicy(
             enforcement="branch_protection",
-            pull_requests=pull_requests.from_branch_protection(data.get("required_pull_request_reviews")),
+            pull_requests=pull_requests.from_branch_protection(
+                data.get("required_pull_request_reviews")
+            ),
             status_checks=status_checks.from_branch_protection(data.get("required_status_checks")),
             signed_commits=signed_commits,
             linear_history=_unwrap(data.get("required_linear_history"), False),
             allow_force_push=_unwrap(data.get("allow_force_pushes"), True),
             allow_deletion=_unwrap(data.get("allow_deletions"), True),
             enforce_admins=_unwrap(data.get("enforce_admins"), False),
-            required_conversation_resolution=_unwrap(data.get("required_conversation_resolution"), False),
+            required_conversation_resolution=_unwrap(
+                data.get("required_conversation_resolution"), False
+            ),
             lock_branch=_unwrap(data.get("lock_branch"), False),
             allow_fork_syncing=_unwrap(data.get("allow_fork_syncing"), False),
             clear_restrictions=data.get("restrictions") is None,
@@ -59,8 +63,7 @@ def to_api_payload(resolved: BranchPolicy, current_raw: dict | None) -> dict:
         "enforce_admins": bool(resolved.enforce_admins),
         "block_creations": _unwrap(current_raw.get("block_creations"), False),
         "restrictions": (
-            None if resolved.clear_restrictions
-            else _actor_refs(current_raw.get("restrictions"))
+            None if resolved.clear_restrictions else _actor_refs(current_raw.get("restrictions"))
         ),
         "required_pull_request_reviews": pull_requests.to_branch_protection(
             resolved.pull_requests, current_raw.get("required_pull_request_reviews")
