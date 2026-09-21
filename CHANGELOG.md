@@ -1,6 +1,88 @@
 # CHANGELOG
 
 
+## v0.4.10 (2026-09-21)
+
+### Bug Fixes
+
+- Report absent delete_branch_on_merge/allow_update_branch as unavailable, not drift
+  ([`907b950`](https://github.com/shipsolid/repo-policy/commit/907b950a3d480bccef55daf583369374b4d846d5))
+
+GET /repos/{owner}/{repo} omits both keys when the token cannot see them (a fine-grained
+  Administration: Read-only PAT, live-confirmed on shipsolid/repo-policy). diff_flat_settings read
+  the absent key as False and reported a permanent false 'add', which is why every policy-audit.yml
+  run failed since the audit token was created. Route absent keys to 'unavailable', the same
+  contract diff_security_and_analysis adopted in v0.4.8.
+
+Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>
+
+- Resolve the repository from SSH host-alias origin URLs
+  ([`6b08b1a`](https://github.com/shipsolid/repo-policy/commit/6b08b1a6493d01eeef15a8202cb48d40cb2b18b2))
+
+* fix: resolve the repository from SSH host-alias origin URLs
+
+git@github.com-work:owner/name (an ~/.ssh/config alias) previously fell through to 'could not
+  determine repository' and forced --repo.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
+* fix: tighten github.com host match to reject lookalike domains
+
+The prior _GITHUB_REMOTE regex had no left boundary before `github\.com` and allowed dots in the
+  alias-suffix segment, so a lookalike host containing that substring (mygithub.com,
+  github.company.com, github.comcast.net) was silently mis-resolved to a valid-looking owner/repo
+  instead of raising 'could not determine repository' as docs/troubleshooting.md promises.
+
+Anchor on an actual host-start position ((?:^|[@/])) and restrict the optional ~/.ssh/config alias
+  suffix to a `-`-prefixed segment, matching the original task-8 intent without regressing any of
+  the four supported origin shapes.
+
+---------
+
+Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>
+
+### Build System
+
+- Pin dev toolchain versions so CI gates cannot drift on upstream releases
+  ([`952199e`](https://github.com/shipsolid/repo-policy/commit/952199ec5ed20c310728e1f084c2c030d3f197a6))
+
+Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>
+
+### Chores
+
+- Update ([#14](https://github.com/shipsolid/repo-policy/pull/14),
+  [`71c0268`](https://github.com/shipsolid/repo-policy/commit/71c0268b9cfa12e58940ea01bd1431529c55f8df))
+
+### Continuous Integration
+
+- Harden e2e.yml -- explicit permissions, no persisted checkout credentials, named job
+  ([`3fa89a3`](https://github.com/shipsolid/repo-policy/commit/3fa89a37361ecc86bc38a39b7b0ba39afdaed1f9))
+
+Brings the last unhardened workflow to the baseline the other four already meet, and closes CodeQL
+  alert #2 (actions/missing-workflow-permissions).
+
+Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>
+
+- Ignore Python major/minor base-image bumps in Dependabot
+  ([`a80fae7`](https://github.com/shipsolid/repo-policy/commit/a80fae7f8944b4ee87950d5f1fea7af6416dde22))
+
+The Action's dependency lock is compiled for Python 3.12; a 3.13/3.14 base-image PR can never pass
+  verify-action-lock without a matching lock regeneration, so it must be a deliberate change, not a
+  weekly proposal.
+
+Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>
+
+### Documentation
+
+- Record Task 14's production-readiness evidence
+  ([`778bfa6`](https://github.com/shipsolid/repo-policy/commit/778bfa6eea31d386ed4ae4c4517bd7feabdb3992))
+
+Adds docs/release-readiness-v1.md consolidating the full evidence trail for Task 14: pre-release
+  checks, live self-governance verification (2 real gaps found and fixed), release trust artifacts
+  independently re-verified against v0.4.9, the full incident narrative (3 real bugs found and fixed
+  across 4 live release attempts), and the re-audit from published artifacts. Decision recorded: GO.
+
+
 ## v0.4.9 (2026-09-21)
 
 ### Bug Fixes
@@ -14,6 +96,11 @@ The release job's checkout happens once, at the start, before the version-bump c
   main to the merged commit right before that step runs. v0.4.8's commit and tag are already live
   and correct; that release never completed (no GitHub Release, no PyPI publish). This fix will
   trigger its own release (v0.4.9) that supersedes the incomplete v0.4.8.
+
+### Chores
+
+- **release**: V0.4.9 [skip ci]
+  ([`ba69faa`](https://github.com/shipsolid/repo-policy/commit/ba69faa05ab3a2128ec52739b096d83a42bb7504))
 
 
 ## v0.4.8 (2026-09-21)
