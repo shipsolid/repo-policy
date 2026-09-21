@@ -110,7 +110,7 @@ third-party Action it consumes (see `.github/workflows/ci.yml`), and the general
 hardening recommendation for any Action, including this one:
 
 ```yaml
-- uses: shipsolid/repo-policy@a986ac738ebe2aad718c89a086c61177aec0a618 # v0.4.7
+- uses: shipsolid/repo-policy@a4d736b7fa8268115f50e61b4398d8d6a7ee7e1a # v0.4.7
   env:
     GITHUB_TOKEN: ${{ secrets.REPO_POLICY_TOKEN }}
   with:
@@ -118,24 +118,39 @@ hardening recommendation for any Action, including this one:
     mode: audit
 ```
 
-Find the commit SHA for the release you want at
-[github.com/shipsolid/repo-policy/tags](https://github.com/shipsolid/repo-policy/tags), or locally
-with `git rev-parse v<version>`.
+Every release tag here (`v<version>`) is an **annotated tag object**, not a direct pointer to a
+commit — so `git rev-parse v<version>` alone returns that tag object's own SHA, not the commit's,
+and pinning `uses:` to it would silently defeat the point of pinning to a commit. Peel through the
+tag to get the actual commit SHA to pin:
+
+```bash
+git rev-parse v<version>^{commit}
+```
+
+or find it at
+[github.com/shipsolid/repo-policy/tags](https://github.com/shipsolid/repo-policy/tags) → click the
+release tag → the commit it points to. (Once the release-bot signing pipeline in `docs/ci-cd.md`'s
+"Release Signing" discussion is live — see `SECURITY.md`'s Release Pipeline Setup Checklist for
+current status — each of these annotated tags will also carry a verifiable SSH signature; that
+doesn't change which SHA to pin here.)
 
 **Convenience alternative — `@v0`:** a floating tag tracking the current major version (the same
-convention `actions/checkout` and similar Actions use), moved automatically to point at the newest
-release's commit every time one ships:
+convention `actions/checkout` and similar Actions use). Each release force-moves it to nest,
+unpeeled, directly on top of that release's own annotated tag object (`v0` → `v<version>` → the
+release commit) — this nesting is what will let `git verify-tag v0` keep verifying transitively
+against the release-bot's signature after every move, once that signing pipeline is live (see
+`docs/ci-cd.md`).
 
 ```yaml
 - uses: shipsolid/repo-policy@v0
 ```
 
-**`@v0` is movable, not immutable.** The commit it resolves to changes on every release without any
+**`@v0` is movable, not immutable.** What it resolves to changes on every release without any
 corresponding change to your own workflow file to review — convenient for staying current
-automatically, but unsuitable anywhere change control requires a pinned, auditable dependency
-(exactly what this repository's own `zizmor` CI gate requires of the Actions *it* consumes — see
-[docs/ci-cd.md](docs/ci-cd.md)). Prefer the full-SHA form above unless you have a specific reason to
-track the moving tag instead.
+automatically, but unsuitable anywhere change control requires a pinned, auditable dependency (the
+same full-SHA-pinning convention this repository's own workflows follow for every third-party
+Action *they* consume — see [docs/ci-cd.md](docs/ci-cd.md)). Prefer the full-SHA form above unless
+you have a specific reason to track the moving tag instead.
 
 **`secrets.GITHUB_TOKEN` will not work here, in any workflow, no matter what `permissions:` you
 grant it** — confirmed against a real repo. GitHub Actions' automatically-generated token has no
@@ -159,7 +174,7 @@ against it on a daily schedule, on every change to the policy file or that workf
   reviewed step — see [SECURITY.md](SECURITY.md)'s Threat Model for why `apply` is never run
   unattended against a real repo from an untrusted trigger), it does not reflect live GitHub state.
 - If a change to `main`'s required status check ever leaves it unable to produce a passing
-  `CI / required` result — blocking the very fix that would repair it — see SECURITY.md's
+  `required` result — blocking the very fix that would repair it — see SECURITY.md's
   "Emergency Recovery" for the documented, auditable bypass procedure.
 
 ## How it works
@@ -177,8 +192,8 @@ This mapping is shared by `audit`, `plan`, and `apply` alike:
 | ---- | ------- |
 | 0 | Success / compliant / no-op |
 | 1 | Drift detected (`audit`/`plan`), or `apply`'s mutations succeeded but a fresh, independent post-apply check still finds drift or an `unavailable` declared setting |
-| 2 | Invalid `policy.yml`, or a setup failure before any API call (missing token, unresolvable `--repo`, GitHub-client construction failure) |
-| 3 | GitHub API/auth/transport error, or a partial-application failure (one or more changes already applied before a later mutation failed) |
+| 2 | Invalid `policy.yml`, a setup failure before any API call (missing token, unresolvable `--repo`, GitHub-client construction failure), or a `PolicyResolutionError` *after* a successful read (GitHub's live state was unparseable, or resolving the declared policy against it produced an invalid combination) — this last case can happen even with a fully valid `policy.yml` |
+| 3 | GitHub API/auth/transport error, or a partial-application failure (a mutation failed partway through an apply's mutation phase; zero or more earlier resources in that phase may already have succeeded) |
 
 ## More docs
 

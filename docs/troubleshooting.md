@@ -67,8 +67,9 @@ a real bug and file an issue with both `plan` outputs attached.
 
 ## `apply` exits 3 partway through, but the output shows some branches already applied
 
-This is `PartialApplyError`: one branch (or repo-setting) mutation failed after one or more earlier
-ones in the same `apply` run already succeeded. The printed journal lines (`<resource>: applied N
+This is `PartialApplyError`: one branch (or repo-setting) mutation failed partway through the same
+`apply` run's mutation phase — zero or more earlier resources in that phase may already have been
+mutated successfully before it. The printed journal lines (`<resource>: applied N
 change(s)` / `<resource>: no changes needed` / `<resource>: failed -- N change(s) not applied`) are
 the ground truth for what happened before the failure — nothing before the failed line was rolled
 back, since repo-policy has no transaction concept across resources (each branch/repo-setting

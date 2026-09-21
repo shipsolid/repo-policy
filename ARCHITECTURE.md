@@ -227,7 +227,8 @@ convention:
 | Nothing needed to change (already compliant), or every needed mutation succeeded and the post-apply verification confirms zero drift | `0` |
 | Every mutation succeeded (or none were needed), but the post-apply verification still finds drift or a declared repo setting still comes back `unavailable` — printed as `apply completed but policy is not converged` | `1` |
 | `policy.yml` failed to load or validate, or a setup failure occurred before any API call was attempted (missing token, unresolvable `--repo`, malformed `owner/name`, or a `GitHubClient` construction failure such as a proxy misconfiguration) | `2` |
-| A `GitHubAPIError` propagated (network/auth/transport error), or a `PartialApplyError` was raised mid-mutation — one or more earlier changes in the same phase already succeeded before the failure | `3` |
+| A `PolicyResolutionError` propagated — this fires *after* a successful read, not before one: either GitHub's current live state for a branch was internally inconsistent and couldn't be parsed (`rulesets.from_api`/`branch_protection.from_api`), or merging a declared policy against that current state (`diff.resolve_desired`) produced a combination `BranchPolicy`'s own validators reject. A fully valid, schema-correct `policy.yml` can still hit this | `2` |
+| A `GitHubAPIError` propagated (network/auth/transport error), or a `PartialApplyError` was raised because a mutation failed partway through an apply's mutation phase — zero or more earlier resources in that same phase may already have been mutated successfully before the failure | `3` |
 
 This mapping — `0` success/compliant, `1` drift or post-apply noncompliance, `2` invalid
 config/setup, `3` API/auth/transport/partial-application failure — is shared by `audit`, `plan`, and

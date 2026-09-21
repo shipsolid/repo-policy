@@ -30,7 +30,8 @@ action.yml, Dockerfile the GitHub Action
                        install smoke test, self-policy validation, workflow security scan, Docker
                        image build+scan); release.yml (semantic-release, signed release tag, PyPI
                        publish, SBOM + attestation); security.yml (pip-audit, CodeQL, a second
-                       zizmor pass); policy-audit.yml (self-governance, read-only)
+                       zizmor pass); policy-audit.yml (self-governance, read-only); e2e.yml
+                       (nightly/manual `pytest -m e2e` against the live fixture repo)
 ```
 
 ## Before opening a PR
@@ -66,20 +67,32 @@ artifacts" and "Release Signing" sections have the full reasoning and threat mod
 command; this is the quick-reference command list.
 
 ```bash
+# 0. Fetch what was actually published — never a fresh local rebuild. Wheel/sdist builds are not
+#    proven byte-reproducible here (hatchling's own `Generator:` metadata line alone varies by
+#    version), and comparing a local rebuild's hash against a published digest is exactly the
+#    "rebuild and diff a hash" anti-pattern SECURITY.md's own Docker-digest discussion warns
+#    against — it produces false "tampering" conclusions from ordinary build-tool variance, not a
+#    real integrity signal. The wheel/sdist live on PyPI; the two SBOMs are GitHub release assets.
+mkdir -p /tmp/repo-policy-verify && cd /tmp/repo-policy-verify
+curl -s https://pypi.org/pypi/repo-policy/<version>/json | jq -r '.urls[].url' | xargs -n1 curl -sLO
+gh release download v<version> --repo shipsolid/repo-policy   # the two SBOM files
+
 # 1. Release signature — the release tag itself, SSH-signed by the dedicated release-bot identity
 #    (one-time: register the bot's public key as a trusted signer for its committer email).
 git fetch --tags origin
 git verify-tag v<version>
 
-# 2. GitHub artifact attestations (Sigstore-backed build provenance) for the wheel, sdist, and SBOMs
-gh attestation verify dist/repo_policy-<version>-py3-none-any.whl --owner shipsolid
-gh attestation verify dist/repo_policy-<version>.tar.gz --owner shipsolid
+# 2. GitHub artifact attestations (Sigstore-backed build provenance), against the files fetched in
+#    step 0 above — never a local rebuild
+gh attestation verify repo_policy-<version>-py3-none-any.whl --owner shipsolid
+gh attestation verify repo_policy-<version>.tar.gz --owner shipsolid
 gh attestation verify sbom-wheel.cdx.json --owner shipsolid
 gh attestation verify sbom-docker.cdx.json --owner shipsolid
 
-# 3. Wheel/sdist integrity — compare a local build's hash against the digest PyPI actually
-#    published for this exact release (PyPI's JSON API, not a guess)
-sha256sum dist/repo_policy-<version>-py3-none-any.whl
+# 3. Wheel digest — confirm the download itself wasn't corrupted or tampered with in transit, by
+#    comparing it against the digest PyPI's own JSON API reports for that exact file (a
+#    transit-integrity check on a downloaded artifact, not a build-reproducibility claim)
+sha256sum repo_policy-<version>-py3-none-any.whl
 curl -s https://pypi.org/pypi/repo-policy/<version>/json | jq -r '.urls[].digests.sha256'
 
 # 4. Container digest — the Docker Action image's attestation is keyed by digest, not a registry
