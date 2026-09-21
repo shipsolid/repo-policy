@@ -1,4 +1,4 @@
-from repo_policy.models import PullRequestPolicy
+from repo_policy.models import BypassPullRequestAllowances, DismissalRestrictions, PullRequestPolicy
 from repo_policy.policies import pull_requests
 
 
@@ -33,25 +33,19 @@ def test_to_branch_protection_defaults_new_fields_false():
     assert payload["require_last_push_approval"] is False
 
 
-def test_to_branch_protection_preserves_dismissal_restrictions_from_current_state():
-    """dismissal_restrictions/bypass_pull_request_allowances have no modeled field -- a human-set
-    allow-list must survive a full-object PUT triggered by an unrelated, modeled field changing.
-    GitHub's GET shapes these as full user/team/app objects; PUT wants bare login/slug strings.
-    dismissal_restrictions supports only users/teams (no apps) -- unlike bypass_pull_request_
-    allowances and branch-protection restrictions, which both support apps."""
-    policy = PullRequestPolicy(required=True, approvals=2, code_owner_review=True)
-    current = {
-        "dismissal_restrictions": {
-            "users": [{"login": "octocat", "id": 1}],
-            "teams": [{"slug": "justice-league", "id": 2}],
-        },
-        "bypass_pull_request_allowances": {
-            "users": [],
-            "teams": [],
-            "apps": [{"slug": "dependabot", "id": 3}],
-        },
-    }
-    payload = pull_requests.to_branch_protection(policy, current=current)
+def test_to_branch_protection_includes_declared_dismissal_restrictions_and_bypass_allowances():
+    """dismissal_restrictions/bypass_pull_request_allowances are fully modeled fields now -- the
+    payload reflects whatever's declared on the policy, not a read-through of live GitHub state.
+    dismissal_restrictions supports only users/teams (no apps) -- unlike
+    bypass_pull_request_allowances and branch-protection restrictions, which both support apps."""
+    policy = PullRequestPolicy(
+        required=True,
+        approvals=2,
+        code_owner_review=True,
+        dismissal_restrictions=DismissalRestrictions(users=["octocat"], teams=["justice-league"]),
+        bypass_pull_request_allowances=BypassPullRequestAllowances(apps=["dependabot"]),
+    )
+    payload = pull_requests.to_branch_protection(policy)
     assert payload["dismissal_restrictions"] == {"users": ["octocat"], "teams": ["justice-league"]}
     assert "apps" not in payload["dismissal_restrictions"]
     assert payload["bypass_pull_request_allowances"] == {
@@ -61,9 +55,9 @@ def test_to_branch_protection_preserves_dismissal_restrictions_from_current_stat
     }
 
 
-def test_to_branch_protection_omits_dismissal_restrictions_when_none_exist():
+def test_to_branch_protection_omits_dismissal_restrictions_and_bypass_allowances_when_undeclared():
     policy = PullRequestPolicy(required=True, approvals=2, code_owner_review=True)
-    payload = pull_requests.to_branch_protection(policy, current=None)
+    payload = pull_requests.to_branch_protection(policy)
     assert "dismissal_restrictions" not in payload
     assert "bypass_pull_request_allowances" not in payload
 
@@ -90,6 +84,45 @@ def test_from_branch_protection_reads_dismiss_stale_reviews_and_last_push_approv
     result = pull_requests.from_branch_protection(data)
     assert result.dismiss_stale_reviews is True
     assert result.require_last_push_approval is True
+
+
+def test_from_branch_protection_reads_dismissal_restrictions_dropping_apps():
+    """GitHub's GET shapes these as full user/team/app objects; dismissal_restrictions supports
+    only users/teams on write, so the (always-present) `apps` key from _actor_refs is dropped
+    when building the model, not just when building the outbound payload."""
+    data = {
+        "required_approving_review_count": 2,
+        "require_code_owner_reviews": True,
+        "dismissal_restrictions": {
+            "users": [{"login": "octocat", "id": 1}],
+            "teams": [{"slug": "justice-league", "id": 2}],
+        },
+    }
+    result = pull_requests.from_branch_protection(data)
+    assert result.dismissal_restrictions == DismissalRestrictions(
+        users=["octocat"], teams=["justice-league"]
+    )
+
+
+def test_from_branch_protection_reads_bypass_pull_request_allowances_including_apps():
+    data = {
+        "required_approving_review_count": 2,
+        "require_code_owner_reviews": True,
+        "bypass_pull_request_allowances": {
+            "users": [],
+            "teams": [],
+            "apps": [{"slug": "dependabot", "id": 3}],
+        },
+    }
+    result = pull_requests.from_branch_protection(data)
+    assert result.bypass_pull_request_allowances == BypassPullRequestAllowances(apps=["dependabot"])
+
+
+def test_from_branch_protection_leaves_dismissal_restrictions_and_bypass_allowances_none_when_absent():
+    data = {"required_approving_review_count": 2, "require_code_owner_reviews": True}
+    result = pull_requests.from_branch_protection(data)
+    assert result.dismissal_restrictions is None
+    assert result.bypass_pull_request_allowances is None
 
 
 def test_to_ruleset_rule_none_when_not_required():

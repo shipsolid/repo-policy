@@ -97,6 +97,31 @@ branches:
       # (blocks a "approve, then sneak in one more unreviewed commit, then
       # merge" race). Default: false.
       require_last_push_approval: true
+      # Who's allowed to dismiss someone else's approved/rejected review --
+      # GitHub's "Restrict who can dismiss pull request reviews". users/teams
+      # only -- GitHub's API has no `apps` slot here at all (unlike
+      # bypass_pull_request_allowances just below), so declaring one is a
+      # validation error, not a silent no-op. No GitHub Rulesets equivalent
+      # -- see Example 2 below. Must name at least one user or team when
+      # declared at all: an empty `{}` is rejected outright rather than sent
+      # to GitHub, since repo-policy has no live-verified answer for whether
+      # GitHub would treat a freshly-authored empty allow-list as "no
+      # restriction" or "restrict to nobody" (docs/adrs/0005-nested-actor-
+      # list-fields.md). Omit this whole block for "no restriction" instead.
+      dismissal_restrictions:
+        users:
+          - octocat
+        teams:
+          - justice-league
+      # Who's allowed to merge without a passing PR review at all -- GitHub's
+      # "Allow specified actors to bypass required pull requests". Unlike
+      # dismissal_restrictions above, this DOES accept apps -- the common
+      # real-world case: letting a release bot or a tool like Dependabot
+      # merge on its own. Same all-empty rejection, same "no Rulesets
+      # equivalent" limitation.
+      bypass_pull_request_allowances:
+        apps:
+          - dependabot
 
     # --- Required status checks ---------------------------------------------
     status_checks:
@@ -213,13 +238,16 @@ branches:
     allow_deletion: false
 
     # NOT declared here at all — enforce_admins, required_conversation_
-    # resolution, lock_branch, allow_fork_syncing, clear_restrictions.
-    # None of the five has a GitHub Rulesets equivalent; setting any of them
-    # to a non-permissive value under `enforcement: ruleset` is a
-    # validate-time error (`... not supported under enforcement: ruleset
-    # (no GitHub Rulesets equivalent) ...`), not a silently-ignored no-op.
-    # If your branch genuinely needs one of these five, it must use
-    # `enforcement: branch_protection` instead — see Example 1 above.
+    # resolution, lock_branch, allow_fork_syncing, clear_restrictions, plus
+    # pull_requests.dismissal_restrictions and
+    # pull_requests.bypass_pull_request_allowances (nested, but the same
+    # limitation). None of the seven has a GitHub Rulesets equivalent;
+    # setting any of them to a non-permissive value under
+    # `enforcement: ruleset` is a validate-time error (`... not supported
+    # under enforcement: ruleset (no GitHub Rulesets equivalent) ...`), not
+    # a silently-ignored no-op. If your branch genuinely needs one of these
+    # seven, it must use `enforcement: branch_protection` instead — see
+    # Example 1 above.
 
 # ------------------------------------------------------------------------------
 # Repository-level settings — separate from the per-branch rules above; these

@@ -129,6 +129,8 @@ Supported fields:
 | per branch      | `status_checks.required`                                                                                                                                                                     | `list[str]`, no blank or duplicate entries                                                                                      |
 | per branch      | `signed_commits`, `linear_history`, `allow_force_push`, `allow_deletion`                                                                                                                     | `bool`                                                                                                                          |
 | per branch      | `enforce_admins`, `required_conversation_resolution`, `lock_branch`, `allow_fork_syncing`, `clear_restrictions`                                                                              | `bool` — **no GitHub Rulesets equivalent**; rejected under `enforcement: ruleset` unless left at their permissive (no-op) value |
+| per branch      | `pull_requests.dismissal_restrictions.users`, `.teams`                                                                                                                                       | `list[str]` each, **at least one required when declared** — users/teams only (no `apps`); **no GitHub Rulesets equivalent**     |
+| per branch      | `pull_requests.bypass_pull_request_allowances.users`, `.teams`, `.apps`                                                                                                                      | `list[str]` each, **at least one required when declared**; **no GitHub Rulesets equivalent**                                    |
 | `repo_settings` | `delete_branch_on_merge`, `allow_update_branch`, `vulnerability_alerts`, `automated_security_fixes`, `private_vulnerability_reporting`, `secret_scanning`, `secret_scanning_push_protection` | `bool`                                                                                                                          |
 
 Two cross-field rules are enforced at validation time, before any API call:
@@ -138,6 +140,12 @@ Two cross-field rules are enforced at validation time, before any API call:
 - `automated_security_fixes: true` requires `vulnerability_alerts: true`, and
   `secret_scanning_push_protection: true` requires `secret_scanning: true` — GitHub rejects enabling
   either one before its prerequisite.
+
+`pull_requests.dismissal_restrictions`/`pull_requests.bypass_pull_request_allowances`, when
+declared, must name at least one user, team, (or app, for the bypass field) — an empty allow-list
+is rejected outright rather than sent to GitHub, since it would be ambiguous between "no
+restriction" and "restrict to nobody." See
+[`docs/adrs/0005-nested-actor-list-fields.md`](docs/adrs/0005-nested-actor-list-fields.md) for why.
 
 `repo-policy validate` checks all of the above against a real `policy.yml`, entirely offline.
 

@@ -7,6 +7,8 @@ from repo_policy.models import (
     FIELD_SPECS,
     PERMISSIVE_PULL_REQUESTS,
     BranchPolicy,
+    BypassPullRequestAllowances,
+    DismissalRestrictions,
     FieldSpec,
     PolicyConfig,
     PullRequestPolicy,
@@ -124,6 +126,55 @@ def test_branch_policy_rejects_clear_restrictions_under_ruleset():
 def test_branch_policy_allows_clear_restrictions_under_branch_protection():
     policy = BranchPolicy(enforcement="branch_protection", clear_restrictions=True)
     assert policy.clear_restrictions is True
+
+
+def test_branch_policy_rejects_dismissal_restrictions_under_ruleset():
+    """dismissal_restrictions/bypass_pull_request_allowances live nested inside `pull_requests`,
+    not as their own top-level BranchPolicy field -- covered by a separate model validator
+    (_reject_ruleset_unsupported_pull_request_fields) from the FIELD_SPECS-driven one every other
+    ruleset-unsupported field above uses, since FIELD_SPECS only ever does getattr(self, name)."""
+    with pytest.raises(ValidationError, match="pull_requests.dismissal_restrictions"):
+        BranchPolicy(
+            enforcement="ruleset",
+            pull_requests=PullRequestPolicy(
+                dismissal_restrictions=DismissalRestrictions(users=["octocat"])
+            ),
+        )
+
+
+def test_branch_policy_rejects_bypass_pull_request_allowances_under_ruleset():
+    with pytest.raises(ValidationError, match="pull_requests.bypass_pull_request_allowances"):
+        BranchPolicy(
+            enforcement="ruleset",
+            pull_requests=PullRequestPolicy(
+                bypass_pull_request_allowances=BypassPullRequestAllowances(apps=["dependabot"])
+            ),
+        )
+
+
+def test_branch_policy_allows_both_dismissal_restrictions_and_bypass_under_branch_protection():
+    policy = BranchPolicy(
+        enforcement="branch_protection",
+        pull_requests=PullRequestPolicy(
+            dismissal_restrictions=DismissalRestrictions(users=["octocat"]),
+            bypass_pull_request_allowances=BypassPullRequestAllowances(apps=["dependabot"]),
+        ),
+    )
+    assert policy.pull_requests.dismissal_restrictions.users == ["octocat"]
+    assert policy.pull_requests.bypass_pull_request_allowances.apps == ["dependabot"]
+
+
+def test_branch_policy_allows_ruleset_when_dismissal_and_bypass_unset():
+    policy = BranchPolicy(
+        enforcement="ruleset", pull_requests=PullRequestPolicy(required=True, approvals=1)
+    )
+    assert policy.pull_requests.dismissal_restrictions is None
+    assert policy.pull_requests.bypass_pull_request_allowances is None
+
+
+def test_branch_policy_allows_ruleset_when_pull_requests_entirely_unset():
+    policy = BranchPolicy(enforcement="ruleset")
+    assert policy.pull_requests is None
 
 
 def test_policy_config_parses_nested_branches():
@@ -292,6 +343,42 @@ def test_pull_request_policy_rejects_approvals_above_github_max():
 def test_pull_request_policy_allows_approvals_at_github_max():
     policy = PullRequestPolicy.model_validate({"approvals": 6})
     assert policy.approvals == 6
+
+
+def test_dismissal_restrictions_rejects_all_empty():
+    with pytest.raises(ValidationError, match="at least one user or team"):
+        DismissalRestrictions()
+
+
+def test_dismissal_restrictions_allows_users_only():
+    restrictions = DismissalRestrictions(users=["octocat"])
+    assert restrictions.users == ["octocat"]
+    assert restrictions.teams == []
+
+
+def test_dismissal_restrictions_allows_teams_only():
+    restrictions = DismissalRestrictions(teams=["justice-league"])
+    assert restrictions.teams == ["justice-league"]
+
+
+def test_dismissal_restrictions_rejects_apps_field():
+    """GitHub's dismissal_restrictions API accepts only users/teams -- unlike
+    bypass_pull_request_allowances and branch-protection restrictions, both apps-capable. Declaring
+    apps: here must be a clear validation error (extra="forbid"), not a silent no-op."""
+    with pytest.raises(ValidationError, match="apps"):
+        DismissalRestrictions.model_validate({"users": ["octocat"], "apps": ["dependabot"]})
+
+
+def test_bypass_pull_request_allowances_rejects_all_empty():
+    with pytest.raises(ValidationError, match="at least one user, team, or app"):
+        BypassPullRequestAllowances()
+
+
+def test_bypass_pull_request_allowances_allows_apps_only():
+    allowances = BypassPullRequestAllowances(apps=["dependabot"])
+    assert allowances.apps == ["dependabot"]
+    assert allowances.users == []
+    assert allowances.teams == []
 
 
 def test_policy_config_rejects_bool_for_version():

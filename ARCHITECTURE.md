@@ -73,7 +73,23 @@ can't drift between "branch protection" and "ruleset" mode.
   additionally carries `dismiss_stale_reviews`/`require_last_push_approval`, which *are* fully
   cross-backend.
 - **`PullRequestPolicy`** / **`StatusChecksPolicy`** — the two fields whose desired state is more
-  than a boolean.
+  than a boolean. `PullRequestPolicy` also carries two optional, nested actor-list fields —
+  `dismissal_restrictions` (`DismissalRestrictions`: `users`/`teams` only) and
+  `bypass_pull_request_allowances` (`BypassPullRequestAllowances`: `users`/`teams`/`apps`) — the
+  first non-scalar, non-boolean fields this codebase models beyond `pull_requests`/`status_checks`
+  themselves. Neither has a GitHub Rulesets equivalent, but because they live *nested* inside
+  `pull_requests` rather than as their own top-level `BranchPolicy` field, the generic
+  `FIELD_SPECS`/`_RULESET_UNSUPPORTED_FIELDS` mechanism above (which only ever does
+  `getattr(self, name)` on a top-level name) can't track them — a separate `BranchPolicy` model
+  validator, `_reject_ruleset_unsupported_pull_request_fields`, handles this one nested case
+  explicitly. Both models also reject an all-empty declaration (`users: [], teams: []` etc.) at
+  `validate` time — repo-policy has no live-verified answer for whether GitHub's API would treat a
+  freshly-authored empty allow-list as "no restriction" or "restrict to nobody," so authoring that
+  ambiguous state is refused outright rather than guessed at (see
+  `docs/adrs/0005-nested-actor-list-fields.md`). This does **not** block *reading* an all-empty
+  state that already exists on GitHub (e.g. set by a human via the raw API) — `from_api`'s existing
+  `except ValidationError` handling (below) already covers exactly this the same way it already
+  does for an inconsistent `allow_fork_syncing`/`lock_branch` combination.
 - **`RepoSettingsPolicy`** — an optional, repo-wide (not per-branch) section: `delete_branch_on_merge`,
   `allow_update_branch`, `vulnerability_alerts`, `automated_security_fixes`,
   `private_vulnerability_reporting`, `secret_scanning`, `secret_scanning_push_protection`. `None`

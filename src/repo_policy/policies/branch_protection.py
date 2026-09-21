@@ -33,7 +33,11 @@ def from_api(data: dict | None, *, signed_commits: bool) -> BranchPolicy:
     except ValidationError as exc:
         # e.g. GitHub returning allow_fork_syncing=true with lock_branch false/absent -- a
         # combination BranchPolicy's own _allow_fork_syncing_requires_lock_branch validator
-        # rejects. Nothing above cli.py catches a raw ValidationError; wrapping it as
+        # rejects. Same mechanism catches GitHub returning an all-empty-but-present
+        # dismissal_restrictions/bypass_pull_request_allowances (DismissalRestrictions/
+        # BypassPullRequestAllowances's own _reject_all_empty validator, models.py) -- a state
+        # repo-policy's own schema refuses to author but GitHub's live API can apparently still
+        # hold. Nothing above cli.py catches a raw ValidationError; wrapping it as
         # PolicyResolutionError (already handled by cli.py, same as resolve_desired()'s own
         # re-validation failures) avoids crashing with Python's default exit code 1, which would
         # collide with EXIT_DRIFT the same way _ConfigClickException exists to prevent for setup
@@ -52,7 +56,10 @@ def to_api_payload(resolved: BranchPolicy, current_raw: dict | None) -> dict:
     clear_restrictions, closing the last repo_security field gap") never sets one either, only
     ever clears it. `block_creations` has no modeled field at all -- read through from
     `current_raw` the same way status_checks.to_branch_protection's `strict` is, so it isn't
-    silently reset to False by an unrelated declared change."""
+    silently reset to False by an unrelated declared change. `required_pull_request_reviews` no
+    longer needs any `current_raw` sub-key: dismissal_restrictions/bypass_pull_request_allowances
+    are fully modeled now (see pull_requests.to_branch_protection), so managed-scope passthrough
+    for those already happened one layer up, in diff.resolve_desired."""
     current_raw = current_raw or {}
     if resolved.pull_requests is None:
         raise ValueError(
@@ -65,9 +72,7 @@ def to_api_payload(resolved: BranchPolicy, current_raw: dict | None) -> dict:
         "restrictions": (
             None if resolved.clear_restrictions else _actor_refs(current_raw.get("restrictions"))
         ),
-        "required_pull_request_reviews": pull_requests.to_branch_protection(
-            resolved.pull_requests, current_raw.get("required_pull_request_reviews")
-        ),
+        "required_pull_request_reviews": pull_requests.to_branch_protection(resolved.pull_requests),
         "required_status_checks": status_checks.to_branch_protection(
             resolved.status_checks, current_raw.get("required_status_checks")
         ),

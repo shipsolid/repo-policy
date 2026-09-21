@@ -49,6 +49,19 @@ branches:
       code_owner_review: false
       dismiss_stale_reviews: true
       require_last_push_approval: true
+      # Optional, situational — most repos need neither. Uncomment and fill in real logins if
+      # you do; each requires at least one entry (an empty list is rejected outright, not sent
+      # to GitHub as-is — see examples/sample-repository-policy.yml for the full explanation).
+      #
+      # Restrict who can dismiss a review, beyond GitHub's default (anyone with write access):
+      # dismissal_restrictions:
+      #   users: [octocat]
+      #   teams: [justice-league]
+      #
+      # Let specific people/bots merge without a human review at all — e.g. a release bot or
+      # Dependabot (dismissal_restrictions has no apps: slot; this field does):
+      # bypass_pull_request_allowances:
+      #   apps: [dependabot]
 
     # REQUIRED customization #2: replace with your repo's actual CI check
     # names, exactly as GitHub reports them on a pull request — not your

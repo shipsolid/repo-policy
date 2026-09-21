@@ -120,8 +120,10 @@ compute for a repository this size. A real release now runs it a third time too 
 
 Task 9 applied real branch protection to `main` on `shipsolid/repo-policy`:
 `pull_requests.required: true` plus `enforce_admins: true`, and `repo-policy` deliberately never
-manages a PR-bypass allowlist for this repo (`bypass_pull_request_allowances` is read-through in
-`src/repo_policy/policies/pull_requests.py` — never cleared, never set). The practical effect:
+declares a PR-bypass allowlist for this repo (`bypass_pull_request_allowances` is a fully modeled
+`policy.yml` field — see `docs/adrs/0005-nested-actor-list-fields.md` — that `.github/repository-
+policy.yml` simply never sets, so managed-scope leaves whatever's already on GitHub, nothing,
+untouched). The practical effect:
 nothing can push directly to `main` anymore, including this workflow's own `python-semantic-release`
 step, which previously did exactly that with `secrets.GITHUB_TOKEN`. This section documents the
 research behind the redesign that followed and the reasoning for each departure from the pre-Task-10

@@ -27,17 +27,67 @@ class _PolicyModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
+class DismissalRestrictions(_PolicyModel):
+    """Who's allowed to dismiss a pull request review -- GitHub's "Restrict who can dismiss pull
+    request reviews". No `apps` field: unlike BypassPullRequestAllowances and branch-protection
+    `restrictions`, GitHub's API only accepts users/teams here -- declaring `apps:` is rejected by
+    `_PolicyModel`'s `extra="forbid"`, the same fail-closed treatment as any other unknown field,
+    not a silent no-op. Must name at least one user or team when declared at all -- see
+    docs/adrs/0005-nested-actor-list-fields.md for why an all-empty declaration is rejected
+    outright instead of being sent to GitHub as-is."""
+
+    users: list[str] = Field(default_factory=list)
+    teams: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _reject_all_empty(self) -> DismissalRestrictions:
+        if not (self.users or self.teams):
+            raise ValueError(
+                "dismissal_restrictions must name at least one user or team -- omit the field "
+                "entirely instead of declaring an empty allow-list (which would be ambiguous "
+                "between 'no restriction' and 'restrict to nobody')"
+            )
+        return self
+
+
+class BypassPullRequestAllowances(_PolicyModel):
+    """Who's allowed to bypass the pull-request requirement entirely -- GitHub's "Allow specified
+    actors to bypass required pull requests". Unlike DismissalRestrictions, GitHub's API accepts
+    apps here too -- the common case this exists for: letting a release bot or a tool like
+    Dependabot merge without a human review. Same all-empty rejection as DismissalRestrictions,
+    for the same reason."""
+
+    users: list[str] = Field(default_factory=list)
+    teams: list[str] = Field(default_factory=list)
+    apps: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _reject_all_empty(self) -> BypassPullRequestAllowances:
+        if not (self.users or self.teams or self.apps):
+            raise ValueError(
+                "bypass_pull_request_allowances must name at least one user, team, or app -- omit "
+                "the field entirely instead of declaring an empty allow-list (which would be "
+                "ambiguous between 'no bypass' and 'bypass restricted to nobody')"
+            )
+        return self
+
+
 class PullRequestPolicy(_PolicyModel):
     """Point-in-time policy snapshot (declared, current, or resolved), never mutated in place
-    anywhere in this codebase -- see _PolicyModel. Frozen (since every field here is a scalar)
-    also makes instances hashable, which Change (diff.py) needs since it's itself a frozen
-    dataclass whose auto-derived __hash__ requires every field value to be hashable."""
+    anywhere in this codebase -- see _PolicyModel. Frozen makes every scalar field here hashable --
+    but `dismissal_restrictions`/`bypass_pull_request_allowances` break that guarantee when
+    populated (list-bearing nested models, the same way StatusChecksPolicy's own `required`
+    already does; see that class's docstring for the same honest caveat). Change (diff.py) only
+    ever needs this hashability with these two fields at their default `None`, so nothing
+    currently breaks in practice -- full hashability here is best-effort, not a strict guarantee."""
 
     required: bool = True
     approvals: int = Field(default=1, ge=0, le=6)
     code_owner_review: bool = False
     dismiss_stale_reviews: bool = False
     require_last_push_approval: bool = False
+    dismissal_restrictions: DismissalRestrictions | None = None
+    bypass_pull_request_allowances: BypassPullRequestAllowances | None = None
 
 
 class StatusChecksPolicy(_PolicyModel):
@@ -156,6 +206,29 @@ class BranchPolicy(_PolicyModel):
                 f"{', '.join(set_fields)} not supported under enforcement: ruleset "
                 "(no GitHub Rulesets equivalent) -- use enforcement: branch_protection, "
                 "or remove these fields"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_ruleset_unsupported_pull_request_fields(self) -> BranchPolicy:
+        """dismissal_restrictions/bypass_pull_request_allowances live nested inside
+        `pull_requests`, not as their own top-level BranchPolicy field, so they can't be tracked
+        by FIELD_SPECS/_RULESET_UNSUPPORTED_FIELDS above (those only ever do
+        `getattr(self, name)` on a top-level field name). This is a deliberate, separate special
+        case for the one nested field this codebase models -- not an oversight that
+        generalizing FIELD_SPECS missed."""
+        if self.enforcement != "ruleset" or self.pull_requests is None:
+            return self
+        set_fields = [
+            name
+            for name in ("dismissal_restrictions", "bypass_pull_request_allowances")
+            if getattr(self.pull_requests, name) is not None
+        ]
+        if set_fields:
+            raise ValueError(
+                f"pull_requests.{', pull_requests.'.join(set_fields)} not supported under "
+                "enforcement: ruleset (no GitHub Rulesets equivalent) -- use enforcement: "
+                "branch_protection, or remove these fields"
             )
         return self
 

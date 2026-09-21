@@ -13,12 +13,14 @@
 | Model `clear_restrictions`, closing the last repo_security field gap | Every other field from the sibling tool's baseline was already covered by Phase 1/2; this was the one remaining gap | shipped | TBD |
 | Fix allow_fork_syncing's wrong permissive default | Found via live-repo verification: GitHub silently discards allow_fork_syncing: true unless lock_branch: true is also set, causing permanent phantom drift on any first-time apply | shipped | TBD |
 | Automated end-to-end test against a disposable real repo | Closes the last manual-only gap in `docs/test-strategy.md`; runs nightly/on-demand against `shipsolid/repo-policy-e2e-fixture` via `.github/workflows/e2e.yml` | shipped | TBD |
+| Model `dismissal_restrictions`/`bypass_pull_request_allowances` (PR-review actor-list fields) | Closes the last two unmodeled `required_pull_request_reviews` fields; `bypass_pull_request_allowances` is the mechanism for letting bots (release automation, Dependabot) merge without a human review — see `docs/adrs/0005-nested-actor-list-fields.md` | shipped | TBD |
 
 ## Next
 
 | Item                                                     | Why                                                                                    | Dependency                                | Target |
 | -------------------------------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------- | ------ |
 | CODEOWNERS / multi-maintainer ownership                  | Currently single-maintainer; not yet warranted                                         | a second regular contributor              | TBD    |
+| Live-verify `dismissal_restrictions`/`bypass_pull_request_allowances` against the e2e fixture | Modeled with no live GitHub access this session (`docs/adrs/0005-*`); unit/model coverage is complete but the real API behavior for these two fields is unconfirmed | a real user/team/app login confirmed to have access to `shipsolid/repo-policy-e2e-fixture` | TBD    |
 
 ## Later (directional, unscheduled)
 
