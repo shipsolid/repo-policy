@@ -173,6 +173,33 @@ jobs:
         with:
           python-version: "3.12"
 
+      # `github.sha` is frozen at the moment this workflow run was triggered, but this job doesn't
+      # start until it clears the `release-main` concurrency queue AND the `release` environment's
+      # human approval -- either can take anywhere from seconds to the full 45-minute timeout below.
+      # Every commit that lands on `main` during that wait triggers its own run, serialized behind
+      # this one by the concurrency group; if this job then built the version-bump commit on top of
+      # the stale `github.sha` snapshot, its tree could disagree with `main`'s *current* tip on any
+      # path. That's exactly what happened live on 2026-09-21 (run 35633848337): four PRs merged
+      # while this job's predecessor sat waiting for approval, one of them touching
+      # `.github/workflows/e2e.yml`; when approval finally came, GitHub rejected the push with
+      # "refusing to allow a Personal Access Token to create or update workflow
+      # .github/workflows/e2e.yml without workflow scope" -- even though this job's own commit never
+      # touched that file. RELEASE_BOT_TOKEN deliberately carries no `workflow` scope (kept to
+      # `public_repo` only -- see SECURITY.md); the fix is not to grant it one, but to stop basing
+      # the release on stale state. Fast-forwarding here, right after the environment gate opens and
+      # before computing the bump, means the version-bump commit's parent is always whatever `main`
+      # actually is at execution time, so its tree can never disagree with `main` on any path.
+      # Every commit fast-forwarded past here already cleared its own PR's `required` check before
+      # merging to protected `main` -- this job's own `needs: ci` gate is a belt-and-suspenders
+      # check on top of that, not the only one guarding what gets released.
+      - name: Fast-forward to main's current tip before computing the version bump
+        id: sync
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout origin/main
+          echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       # Compute-only: this step commits and tags LOCALLY (signed -- via the host-side git config
       # from the step above) but does not push and does not create a GitHub Release yet.
       # python-semantic-release's `version` command exposes --push/--no-push and
@@ -256,7 +283,7 @@ jobs:
       - name: Validate the local release commit only touched version/changelog files
         if: steps.release.outputs.released == 'true'
         env:
-          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ steps.sync.outputs.base_sha }}
         run: |
           set -euo pipefail
           allowed="pyproject.toml src/repo_policy/__init__.py CHANGELOG.md"
