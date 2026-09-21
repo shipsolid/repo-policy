@@ -7,6 +7,44 @@ Not a Terraform replacement — no state file, no backend. `repo-policy` is safe
 incrementally on a live repository: by default it only ever touches branches you declare, and
 never deletes anything you didn't ask it to manage.
 
+## Features
+
+**Status legend:** ✅ shipped, available today · 🚧 built, not yet live · 🔜 planned next · 💡
+planned later, unscheduled.
+
+| # | Status | Feature | Description |
+|---|--------|---------|-------------|
+| 1 | ✅ | Declarative `policy.yml` | Define branch protection and repository governance rules in versioned YAML instead of GitHub's settings UI. |
+| 2 | ✅ | `validate` command | Offline schema validation of `policy.yml`; zero network calls. |
+| 3 | ✅ | `audit` command | Read-only compliance check — reports drift against live GitHub state without changing anything. |
+| 4 | ✅ | `plan` command | Human-readable, field-by-field preview (`+`/`-`/`~`/`✓`) of exactly what `apply` would change. |
+| 5 | ✅ | `apply` command | Reconciles GitHub to match `policy.yml`, then independently re-verifies live state before reporting success. |
+| 6 | ✅ | Managed-scope default (no state file) | Only touches branches and fields you explicitly declare; safe to adopt incrementally on an already-live repository. |
+| 7 | ✅ | Strict mode (opt-in) | Full desired-state enforcement, settable at the top level or overridden per branch. |
+| 8 | ✅ | Dual enforcement backends | Classic branch protection and GitHub Rulesets, selected per branch via `enforcement:`. |
+| 9 | ✅ | Ruleset ownership convention | Repo-policy-managed rulesets are named `repo-policy:<branch>`; strict mode prunes only the orphaned ones it owns. |
+| 10 | ✅ | Stale-protection detection | Flags leftover classic branch protection when a branch moves from `branch_protection` to `ruleset` enforcement. |
+| 11 | ✅ | Pull request policy controls | Required reviews, approval count (0–6), code owner review, dismiss stale reviews, require last push approval. |
+| 12 | ✅ | Required status checks | Declare the exact CI check names that must pass before a branch can merge. |
+| 13 | ✅ | Branch hygiene controls | Signed commits, linear history, force-push/deletion protection, admin enforcement, conversation resolution, branch lock, fork syncing, push-restriction clearing. |
+| 14 | ✅ | Repo-level settings | Delete-branch-on-merge, allow-update-branch, Dependabot alerts/security updates, private vulnerability reporting, secret scanning + push protection. |
+| 15 | ✅ | Fail-closed schema validation | Rejects unknown fields, coerced types, duplicate YAML keys, and invalid cross-field combinations before any API call. |
+| 16 | ✅ | GitHub Action | Docker-based Action wrapping the full CLI (`validate`/`audit`/`plan`/`apply`) via `config`/`mode` inputs. |
+| 17 | ✅ | Consistent exit-code contract | Shared `0`/`1`/`2`/`3` exit codes across every command, safe for CI branching. |
+| 18 | ✅ | Partial-apply journaling | Line-by-line record of exactly what succeeded before a mutation failure, so re-running is always safe. |
+| 19 | ✅ | Proxy / SOCKS support | Honors `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`, including `socks5`/`socks5h` schemes, out of the box. |
+| 20 | ✅ | Self-governance | This repository audits its own branch protection daily, using its own tool (`.github/workflows/policy-audit.yml`). |
+| 21 | 🚧 | Signed, verifiable release tags | SSH-signed annotated release tags via a dedicated release-bot identity; code-complete, pending final live-repo setup (see [SECURITY.md](SECURITY.md)'s Release Pipeline Setup Checklist). |
+| 22 | 🔜 | CODEOWNERS / multi-maintainer ownership | Blocked on a second regular contributor joining the project. |
+| 23 | 💡 | Org-wide policy inheritance | A default policy that an org's repositories inherit unless explicitly overridden. |
+| 24 | 💡 | Multi-repository orchestration | `repo-policy apply` across a list of repositories in a single invocation. |
+| 25 | 💡 | GitHub App authentication | Alternative to a PAT; would resolve the `GITHUB_TOKEN` platform limitation more elegantly. |
+| 26 | 💡 | Full branch-protection release in strict mode | A way to fully "unprotect" a `branch_protection`-backed branch removed from `policy.yml` (currently a documented v1 limitation). |
+
+See [ROADMAP.md](ROADMAP.md) for target versions and dates, and its "Explicitly not doing" section
+for things deliberately kept out of scope (a state file, a UI/dashboard, other Git providers, a
+central server).
+
 ## Install
 
 ```bash
