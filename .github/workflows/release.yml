@@ -76,9 +76,10 @@ jobs:
       # exits 2 under `--strict version --print-tag` with no commit/tag/push side effects, and the
       # same repo with a fix: commit added exits 0 and prints the new tag, also with zero side
       # effects (print_only_tag short-circuits before any git-mutating code path runs). Installed
-      # via pip rather than the pinned Docker Action used below in `release`: the Action's own
-      # container doesn't expose a simple way to read this command's stdout/exit-code back into a
-      # host-side step, and this check only needs the plain CLI's `--print-tag` output.
+      # via pip, the same explicitly-pinned way `release`'s version-bump step and the
+      # "Create the GitHub release" step below both do -- all three python-semantic-release
+      # invocations in this workflow pin the same package version now, not just an Action wrapping
+      # it (see the version-bump step's own comment for the incident that made this the rule).
       - name: Check whether a release is warranted (no side effects)
         id: check
         run: |
@@ -140,18 +141,13 @@ jobs:
           # real `CI / required` check on the PR's head commit.
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
 
-      # Host-side git signing config -- separate from, and IN ADDITION TO, the container-internal
-      # config the pinned python-semantic-release Action sets up for itself in the very next step.
-      # That Action runs as a Docker container action, where `$HOME` is `/github/home` (a
-      # runner-temp-dir bind mount) -- completely separate from the HOST's own `$HOME` that every
-      # plain `run:` step in this job (the verify-commit/verify-tag smoke test, both diff-checks,
-      # and the tag-creation/floating-tag steps further down) actually uses. Confirmed by tracing
-      # the pinned action's own `action.sh` and the Actions runner's `ContainerActionHandler.cs`
-      # source, and reproduced locally: `git verify-tag`/`git verify-commit`/`git tag -s` against
-      # the container's config paths all fail on the host with "Unable to open allowed keys file" /
-      # "Couldn't load public key". Without this step, every host-side signing/verification step
-      # below would fail -- the container step's own config never reaches them.
-      - name: Configure host-side git signing (separate $HOME from the PSR container step below)
+      # Git signing config for every plain `run:` step in this job -- the version-bump step, the
+      # verify-commit/verify-tag smoke test, both diff-checks, and the tag-creation/floating-tag
+      # steps further down all run on this same host and inherit this one config. (An earlier
+      # version of this job ran the version-bump step inside a separate Docker container Action,
+      # whose own isolated `$HOME` meant this same config had to be duplicated a second time just
+      # for the container -- see the version-bump step's own comment for why that Action is gone.)
+      - name: Configure host-side git signing
         env:
           RELEASE_BOT_SIGNING_KEY: ${{ secrets.RELEASE_BOT_SIGNING_KEY }}
           RELEASE_BOT_SSH_PUBLIC_KEY: ${{ vars.RELEASE_BOT_SSH_PUBLIC_KEY }}
@@ -161,9 +157,9 @@ jobs:
           allowed_signers_path="$RUNNER_TEMP/allowed_signers"
           printf '%s\n' "$RELEASE_BOT_SIGNING_KEY" > "$key_path"
           chmod 600 "$key_path"
-          # Principal must match git_committer_email used below (and in the PSR step's own
-          # container config) -- git verify-commit/git verify-tag check the signer's identity
-          # against this file's principal, not just that the key matches.
+          # Principal must match GIT_COMMIT_AUTHOR's email in the version-bump step below --
+          # git verify-commit/git verify-tag check the signer's identity against this file's
+          # principal, not just that the key matches.
           printf 'amitsingh007s+repopolicybot@gmail.com %s\n' "$RELEASE_BOT_SSH_PUBLIC_KEY" > "$allowed_signers_path"
           git config --global gpg.format ssh
           git config --global user.signingKey "$key_path"
@@ -177,39 +173,65 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Compute-only: this step commits and tags LOCALLY (signed -- see the ssh_*_signing_key
-      # inputs below) but does not push and does not create a GitHub Release yet. python-semantic-
-      # release v9's `version` command (what this Action wraps -- confirmed by decoding its
-      # action.sh) exposes --push/--no-push and --vcs-release/--no-vcs-release as independent
-      # flags; splitting "compute+commit+tag" from "push+release" this way is what lets the commit
-      # go through a real PR instead of a direct push, and lets the tag get created against the
-      # commit that actually lands on `main` after that PR merges (see the tag step near the
-      # bottom of this job for why that distinction matters).
+      # Compute-only: this step commits and tags LOCALLY (signed -- via the host-side git config
+      # from the step above) but does not push and does not create a GitHub Release yet.
+      # python-semantic-release's `version` command exposes --push/--no-push and
+      # --vcs-release/--no-vcs-release as independent flags; splitting "compute+commit+tag" from
+      # "push+release" this way is what lets the commit go through a real PR instead of a direct
+      # push, and lets the tag get created against the commit that actually lands on `main` after
+      # that PR merges (see the tag step near the bottom of this job for why that distinction
+      # matters).
       #
-      # github_token is a required input but genuinely unused here: with push/vcs_release both
-      # false, PSR's own code path that would consume it (`hvcs_client.remote_url(...)`, gated by
-      # `if push_changes:`) never executes -- confirmed by reading version.py. secrets.GITHUB_TOKEN
-      # (not the bot's PAT) is passed for exactly that reason: no need to expose the more powerful
-      # credential to a step that can't use it.
+      # Previously ran via the `python-semantic-release/python-semantic-release` Docker Action
+      # (pinned by commit SHA). That SHA pin only pins the ACTION's own code -- not the version of
+      # the `python-semantic-release` PyPI package its Dockerfile installs, which is resolved fresh
+      # on every build. This caused a real incident: the Action's container installed
+      # python-semantic-release 10.6.2 (not the 9.21.2 this project is designed and tested
+      # against), and 10.6.2 computed a "patch"-type bump from 0.4.7 as "1.0.0" instead of the
+      # correct "0.4.8" -- confirmed in that incident's own job logs, and confirmed the other way
+      # too: installing the pinned 9.21.2 directly and running `semantic-release version --print`
+      # against this exact commit history correctly prints "0.4.8". Fix: stop depending on the
+      # Action's own floating dependency resolution entirely -- install python-semantic-release
+      # explicitly pinned via pip, exactly like `check-release-warranted` and the "Create the
+      # GitHub release" step below already (and correctly) do. This also means the Action's
+      # ssh_*_signing_key inputs are no longer needed here: running on the host rather than in the
+      # Action's isolated container means this step already inherits the host-side signing config
+      # the step above just set up -- no separate, redundant signing setup required.
       #
-      # ssh_public_signing_key/ssh_private_signing_key/git_committer_email: this Action's own
-      # action.sh, when given all three, does exactly what brief Step 3 asks for by hand (git
-      # config gpg.format ssh / user.signingKey / commit.gpgsign / tag.gpgSign) *and* writes a
-      # ~/.ssh/allowed_signers file -- which the verify-commit/verify-tag steps below need and the
-      # brief's own snippet doesn't set up. Reusing that existing, still-pinned Action for this
-      # narrower job was chosen over hand-rolling git config: less new code, and the allowed_signers
-      # file comes for free.
+      # GIT_COMMIT_AUTHOR is still needed explicitly, though -- confirmed by reading
+      # python-semantic-release's own source (gitproject.py, config.py): PSR does NOT read the
+      # committer identity from host `git config user.name`/`user.email` the way a plain
+      # `git commit` would. It force-exports GIT_AUTHOR_NAME/EMAIL and GIT_COMMITTER_NAME/EMAIL
+      # from its own `commit_author` setting (default "semantic-release <semantic-release>"),
+      # overriding whatever host git config the step above set. Without this, the release commit
+      # would land authored/committed as that default identity instead of the release-bot's.
+      #
+      # `semantic-release --strict version --print-tag` first, exactly mirroring
+      # `check-release-warranted`'s own proven detection pattern (exit 2 = nothing to release, no
+      # side effects either way -- print_only_tag short-circuits before any git-mutating code path
+      # runs), to compute this step's `released`/`tag` outputs before the real, mutating
+      # `semantic-release version` call below.
       - name: Compute the version bump (commit + tag locally; do not push or create a release yet)
         id: release
-        uses: python-semantic-release/python-semantic-release@9a026e9303981c866c3425723009becb2437c757 # v9 (currently v9.21.2)
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          push: "false"
-          vcs_release: "false"
-          git_committer_name: shipsolid-release-bot
-          git_committer_email: amitsingh007s+repopolicybot@gmail.com
-          ssh_public_signing_key: ${{ vars.RELEASE_BOT_SSH_PUBLIC_KEY }}
-          ssh_private_signing_key: ${{ secrets.RELEASE_BOT_SIGNING_KEY }}
+        env:
+          GIT_COMMIT_AUTHOR: "shipsolid-release-bot <amitsingh007s+repopolicybot@gmail.com>"
+        run: |
+          set -euo pipefail
+          pip install --quiet "python-semantic-release==9.21.2"
+          if tag="$(semantic-release --strict version --print-tag)"; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            semantic-release version --no-push --no-vcs-release
+          else
+            status=$?
+            if [ "$status" -eq 2 ]; then
+              echo "No release is warranted (no feat:/fix:/breaking-change commits since the last release tag) -- unexpected here since check-release-warranted already said otherwise, but handled the same way rather than assumed impossible"
+              echo "released=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::semantic-release --print-tag failed unexpectedly (exit ${status})"
+              exit "$status"
+            fi
+          fi
 
       # Signing smoke test, not the release's real verification gate (that's the tag-verify step
       # near the bottom): confirms the SSH signing config above actually produced a valid signature

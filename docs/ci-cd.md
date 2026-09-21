@@ -130,12 +130,18 @@ key-rotation/recovery procedures, and its "Release Pipeline Setup Checklist" for
 needs to exist on GitHub before any of this can run for real.
 
 **What `python-semantic-release` v9 actually supports (checked against the installed `9.21.2`, not
-assumed):** its `version` command — what the pinned `python-semantic-release/python-semantic-release`
-Action wraps, confirmed by decoding that Action's `action.sh` — exposes `--push`/`--no-push` and
-`--vcs-release`/`--no-vcs-release` as independent flags (`semantic-release version --help`), and its
-own `gitproject.py` shells out to plain `git commit`/`git tag -a`/`git push` with no signing
-override, so local `git config` (`commit.gpgsign`, `tag.gpgSign`, `gpg.format`) applies to whatever
-PSR does exactly as it would to a manual `git commit`. That's what makes the split below possible:
+assumed):** its `version` command exposes `--push`/`--no-push` and `--vcs-release`/
+`--no-vcs-release` as independent flags (`semantic-release version --help`), and its own
+`gitproject.py` shells out to plain `git commit`/`git tag -a`/`git push` with no signing override,
+so local `git config` (`commit.gpgsign`, `tag.gpgSign`, `gpg.format`) applies to whatever
+PSR does exactly as it would to a manual `git commit`. Committer *identity* is the one exception:
+PSR reads it from its own `commit_author` setting (`GIT_COMMIT_AUTHOR` env var, or
+`[tool.semantic_release] commit_author` in `pyproject.toml`) and force-exports
+`GIT_AUTHOR_NAME`/`EMAIL`/`GIT_COMMITTER_NAME`/`EMAIL` from it — confirmed by reading `gitproject.py`
+and `config.py` — which overrides whatever `git config user.name`/`user.email` the host has set, so
+the version-bump step in `release.yml` sets `GIT_COMMIT_AUTHOR` explicitly rather than relying on
+the host git identity the signing config above configures for a different purpose. That's what
+makes the split below possible:
 `version --no-push --no-vcs-release` computes the bump, writes it to `pyproject.toml`/`__init__.py`,
 builds `dist/`, and creates a **local, signed** commit and tag — without ever touching the network.
 Separately, PSR's `publish` command turns out to be for uploading already-built distributions to an
@@ -147,27 +153,22 @@ after the tag already exists was considered and rejected: PSR treats an already-
 "nothing to do" (checked via `previously_released_versions` in `version.py`) and silently no-ops,
 so it can't be used to "finish" a release after an out-of-band tag push.
 
-**Host-side vs. container-side signing config — a second `$HOME` this design has to account for:**
-the pinned `python-semantic-release` Action runs as a **Docker container action**. When given the
-`ssh_public_signing_key`/`ssh_private_signing_key`/`git_committer_email` inputs, its own `action.sh`
-writes the keys and an `allowed_signers` file and sets `gpg.format ssh` / `user.signingKey` /
-`commit.gpgsign` / `tag.gpgsign` globally — but *inside its own container*, where `$HOME` is
-`/github/home` (a runner-temp-dir bind mount). That is a completely different `$HOME` from the one
-every plain `run:` step in the same job uses on the **host** — confirmed by tracing the pinned
-action's own `action.sh` alongside the GitHub Actions runner's own `ContainerActionHandler.cs`
-source, and reproduced locally: pointing `git verify-tag`/`git verify-commit`/`git tag -s` at the
-container's config paths from a host shell fails with "Unable to open allowed keys file" / "Couldn't
-load public key". Concretely, this means the PSR step's own container-internal signing config never
-reaches the signing-smoke-test step right after it, the two diff-checks, or the tag-creation/
-floating-tag steps further down — all of which run as ordinary host-side `run:` steps. `release.yml`
-therefore has an explicit, early "Configure host-side git signing" step, right after checkout and
-before the PSR step, that duplicates (not replaces) the same `git config --global` setup on the
-**host's** `$HOME`, using the same secrets and the same committer identity. This is why the commit
-PSR signs *inside its container* still verifies correctly in a *later host-side* step: the signature
-bytes are embedded in the commit/tag object itself (part of the repository, which the container and
-host share via the mounted workspace), so any correctly-configured `allowed_signers` file — container
-or host — can verify it; the container-internal config only had to be correct for PSR's own signing
-step to succeed, not for anything downstream.
+**Signing config — one `$HOME`, one place it's set:** `release.yml` has a single, explicit
+"Configure host-side git signing" step, right after checkout and before the version-bump step,
+that writes the signing key and an `allowed_signers` file and sets `gpg.format ssh` /
+`user.signingKey` / `commit.gpgsign` / `tag.gpgsign` globally on the runner **host's** `$HOME`.
+Every later step in this job — the version-bump computation itself, the signing-smoke-test right
+after it, both diff-checks, and the tag-creation/floating-tag steps further down — is a plain
+`run:` step on that same host, so all of them see the same config with no duplication needed.
+
+This wasn't always true: an earlier version of this step ran `python-semantic-release` via a
+pinned Docker container Action instead of a plain host-side `pip install`, which meant the
+Action's own container-internal signing config (written to `/github/home`, a separate
+runner-temp-dir bind mount — confirmed by tracing the Action's own `action.sh` and the GitHub
+Actions runner's `ContainerActionHandler.cs` source) never reached any of the host-side steps
+around it, requiring a *second*, duplicated `git config --global` setup just for the host. That
+Action is gone now — see "Why the version-bump step doesn't use a pinned Action" below — so
+there's no longer a second `$HOME` to account for at all.
 
 One second-order consequence of setting `tag.gpgsign true` globally on the host: the pre-existing
 "move the floating major tag" step (`git tag -f "$MAJOR_TAG" "$RELEASE_TAG"`, no `-a`/`-m` of its
@@ -181,6 +182,45 @@ directly at the signed annotated `$RELEASE_TAG` object, and `git verify-tag "$MA
 transitively through that nesting — confirmed by local scratch testing (a real ed25519 key, a real
 `allowed_signers` file: the nested tag verifies cleanly against the same signature the underlying
 annotated tag carries). Peeling to the commit would lose that property for no benefit.
+
+**Why the version-bump step doesn't use a pinned Action:** it used to. The step ran
+`python-semantic-release/python-semantic-release`, pinned by full commit SHA per this project's
+own Action-pinning rule. That turned out not to be enough: the SHA pins the Action's own code, not
+the version of the `python-semantic-release` PyPI package its Dockerfile installs — which is
+resolved fresh against PyPI on every build, not baked into a fixed image layer at the SHA's commit
+time. This caused a real incident during this project's first live release attempt: the Action's
+container installed `python-semantic-release==10.6.2`, not the `9.21.2` this project is designed,
+tested, and documented against (a fact confirmed directly in that run's own job logs), and 10.6.2
+computed a "patch"-type version bump from `0.4.7` as `1.0.0` instead of the correct `0.4.8` —
+confirmed independently by installing the pinned `9.21.2` directly and running
+`semantic-release version --print` against the same commit history, which correctly prints
+`0.4.8`. The wrong `1.0.0` landed on `main` and as a signed tag before the pipeline failed at a
+later step; nothing was published externally (no PyPI release, no GitHub Release).
+
+The first cleanup attempt — a standalone `chore:` commit reverting the version files, pushed
+separately from the pipeline fix — turned out to be wrong, and produced a second occurrence of the
+exact same incident: any push to `main` re-triggers `release.yml`, and `check-release-warranted`
+re-evaluates the whole range since the last release TAG, not just the triggering commit. Deleting
+the erroneous `v1.0.0`/`v1` tags made `v0.4.7` "the last release" again, and the real `fix:` commit
+this release exists to ship was still sitting in history since then — PSR has no notion of
+"already attempted and failed" separate from git tags, so `check-release-warranted` correctly said
+"warranted" again on the revert-only push, and since the pipeline fix hadn't landed yet, the same
+broken Action ran again and produced a second wrong `1.0.0` commit and tags. Contained again (no
+external publish either time), but avoidable: **a revert-only push does not stop this from firing
+again while the underlying commit remains genuinely unreleased — only landing a correct release,
+or fixing the pipeline *before* the next push, does.** The actual fix below was bundled into the
+same commit as the second revert for exactly this reason.
+
+The fix: stop depending on the Action's own floating dependency resolution. The version-bump step
+now installs `python-semantic-release==9.21.2` directly via `pip`, exactly like
+`check-release-warranted` and the "Create the GitHub release" step already (and correctly) do —
+all three PSR invocations in this workflow now pin the same explicit package version, not just an
+Action wrapping it. Running on the host directly removes the Action's `ssh_*_signing_key` inputs:
+this step now just inherits the host-side signing config from the step before it, the same as
+every other step in this job. Committer *identity* is a different matter, though, and is **not**
+inherited the same way — dropping the Action's `git_committer_name`/`git_committer_email` inputs
+without a replacement was an early draft of this fix, and it was wrong: see the `GIT_COMMIT_AUTHOR`
+note above for why PSR needs that identity told to it explicitly regardless of host git config.
 
 **Tag protection vs. branch protection (verified, not assumed):** the task that produced this
 redesign started from a documentation-based hypothesis that classic branch protection — the
@@ -326,8 +366,8 @@ deleted on merge by the repository's own `delete_branch_on_merge: true` self-pol
    in production, see `docs/test-strategy.md`), regenerates `CHANGELOG.md`, and creates a **local**,
    release-bot-signed commit (`chore(release): {version}`) and tag (`v{version}`) — neither is
    pushed yet. (Host-side git signing config for this and every later signing/verification step in
-   the job is set up once, right after checkout, before this step — see "Host-side vs.
-   container-side signing config" below.)
+   the job is set up once, right after checkout, before this step — see "Signing config — one
+   `$HOME`, one place it's set" below.)
 5. The workflow diffs that local commit against the pre-release commit and fails the job if it
    touched anything other than `pyproject.toml`, `src/repo_policy/__init__.py`, and
    `CHANGELOG.md` — an early, fail-fast copy of the check in step 8, against a compromised or
@@ -350,8 +390,8 @@ deleted on merge by the repository's own `delete_branch_on_merge: true` self-pol
    captured commit (tags are outside branch protection's scope — see "Tag protection vs. branch
    protection" above), then verifies its own signature with `git verify-tag` before anything below
    runs. The floating major tag (`v0` until a `1.0.0` ships — see README) is force-moved to point at
-   it (with tag signing disabled for just that one command — see "Host-side vs. container-side
-   signing config" below for why that's necessary and safe), and
+   it (with tag signing disabled for just that one command — see "Signing config — one `$HOME`,
+   one place it's set" below for why that's necessary and safe), and
    `semantic-release changelog --post-to-release-tag` creates the GitHub release for it.
 10. The built sdist/wheel (built locally in step 4, before any of the push/PR/merge machinery
     above — their file contents don't change when the surrounding commit gets squashed) are handed
@@ -381,10 +421,12 @@ Each job in `release.yml` carries only the permission its own steps need:
 | `sbom` | `contents: read`, `id-token: write`, `attestations: write` | Generates SBOMs and signs Sigstore-backed attestations. Its own steps (installing a PyPI package, `docker build`, `pip install` a built wheel) aren't narrow enough to also trust with `contents: write` in the same job — see "SBOM and provenance" below for why that matters concretely (PyPI trusted publishing matches on repository + workflow filename). |
 | `release-assets` | `contents: write` only | Attaches the SBOMs `sbom` produced to the GitHub release. Never checks out the repo and never holds `id-token: write` — mirrors the `release`/`publish` split for the same reason. |
 
-The `release` job's own default-token `permissions: contents: read` is what it needs anyway (the
-`python-semantic-release` Action's compute-only invocation is given `secrets.GITHUB_TOKEN` purely
-because its `github_token` input is required by its schema — with `push`/`vcs_release` both `false`
-it never actually calls out with that token; confirmed by reading `version.py`, not assumed).
+The `release` job's own default-token `permissions: contents: read` is what it needs anyway: the
+version-bump step's `pip install "python-semantic-release==9.21.2"` plus a plain
+`semantic-release version --no-push --no-vcs-release` call has no `github_token`-shaped input of
+its own to hand a token to at all — it never authenticates to GitHub, since `--no-push`/
+`--no-vcs-release` mean it only reads local git history and writes local, unpushed commit/tag
+objects.
 
 The workflow-level default is `permissions: {}`; nothing falls back to the repository's broader
 default token permissions.
