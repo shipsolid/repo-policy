@@ -197,7 +197,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin main
-          git checkout origin/main
+          git merge --ff-only origin/main
           echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # Compute-only: this step commits and tags LOCALLY (signed -- via the host-side git config
