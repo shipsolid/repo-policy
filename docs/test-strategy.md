@@ -162,4 +162,11 @@ addressed structurally, not by convention:
 - ~~No automated end-to-end test against a real GitHub repository~~ — closed: see `tests/e2e/`
   and `.github/workflows/e2e.yml`.
 - No test exercises GitHub's classic-branch-protection-specific edge cases beyond what's modeled
-  (e.g. `restrictions` with actual user/team push restrictions configured).
+  (e.g. `restrictions` with actual user/team push restrictions configured, or
+  `dismissal_restrictions`/`bypass_pull_request_allowances`). **2026-09-22: attempted with a real
+  second collaborator (`shipsolid-release-bot`) added to `shipsolid/repo-policy-e2e-fixture`** —
+  blocked by a GitHub API constraint, not a missing identity: `422 "Only organization repositories
+  can have users and team restrictions"`. The fixture repo is personal-account-owned
+  (`owner.type: "User"`); GitHub rejects named user/team restrictions on any personal repo
+  regardless of collaborator count. Live-verifying these three fields needs the fixture repo (or a
+  second, dedicated one) to live under a GitHub organization — see `ROADMAP.md`'s "Next" table.
