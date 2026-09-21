@@ -218,10 +218,11 @@ against it on a daily schedule, on every change to the policy file or that workf
   on `shipsolid/repo-policy` — confirmed by comparing `gh api` branch-protection/`security_and_analysis`
   output directly against the policy file, field by field, and by running `repo-policy audit --config
   .github/repository-policy.yml` against the live repository, which reports compliant. The scheduled
-  `policy-audit.yml` workflow's own run history has not yet independently demonstrated this with its
-  production `POLICY_AUDIT_TOKEN`, though — check its run history before treating a red run there as
-  evidence of live drift rather than a possible token-scope artifact (open item, tracked alongside
-  this repository's own remediation backlog).
+  `policy-audit.yml` workflow itself will nonetheless always show a red run, permanently reporting
+  `delete_branch_on_merge`/`allow_update_branch` as unavailable under `POLICY_AUDIT_TOKEN`'s
+  deliberately narrow scope — a known, accepted limitation, not evidence of drift; see
+  [SECURITY.md](SECURITY.md)'s "Known Limitations" for the full reasoning and why the alternative
+  (a broader classic PAT) was rejected.
 - If a change to `main`'s required status check ever leaves it unable to produce a passing
   `required` result — blocking the very fix that would repair it — see SECURITY.md's "Emergency
   Recovery" for the documented, auditable bypass procedure.

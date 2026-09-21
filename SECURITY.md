@@ -89,8 +89,12 @@ restrict itself to a subset. This is why token scoping (above) is the primary co
   repository's own self-audit (see README's "Self-governance"). Narrower still — fine-grained,
   `Administration: Read` only (not `Read and write`), restricted to this single repository
   (`shipsolid/repo-policy`) — because that workflow only ever runs `audit`, never `apply`, so it
-  has no legitimate need for write access at all. This secret does not exist yet; creating it is a
-  live-repo setup step for whoever holds admin access on `shipsolid/repo-policy`.
+  has no legitimate need for write access at all. This secret is provisioned. Deliberately kept as
+  a fine-grained PAT rather than a broader classic `repo`-scoped one, even though a classic PAT
+  would additionally expose `delete_branch_on_merge`/`allow_update_branch` (see Known Limitations)
+  — a classic PAT can't be restricted to this one repository, so the trade would be a materially
+  larger blast radius for two flat repo-setting fields this workflow already reports honestly as
+  unavailable rather than silently guessing at.
 - A fourth PAT, `RELEASE_BOT_TOKEN` (Task 10), belongs to the dedicated `shipsolid-release-bot`
   identity and is what `.github/workflows/release.yml`'s `release` job uses to push its version-bump
   branch, open and squash-merge the release pull request, push the signed release tag, and create
@@ -562,3 +566,20 @@ audited, time-boxed repository-settings change, not something `repo-policy` itse
   resolve a patched click into `requirements-release.txt` without python-semantic-release itself
   relaxing that constraint. Revisit when python-semantic-release publishes a release that allows a
   patched click, or when this project moves off `python-semantic-release==9.21.2`.
+- `policy-audit.yml`'s scheduled run will permanently report `repo settings: delete_branch_on_merge
+  unavailable on this repository` and the same for `allow_update_branch`, even though both are
+  correctly set live (confirmed via TASK-002's evidence). This is an accepted, structural
+  limitation of `POLICY_AUDIT_TOKEN`'s deliberately narrow scope, not a bug and not drift:
+  `repo_settings.py`'s `diff_flat_settings` documents (live-confirmed 2026-09-21) that GitHub omits
+  both keys entirely from a fine-grained PAT's response regardless of permission level — only a
+  classic PAT exposes them. Switching `POLICY_AUDIT_TOKEN` to a classic PAT was evaluated
+  (2026-09-22) and rejected: a classic PAT also needs its owning account to hold **Admin** on this
+  repository to correctly read branch protection / `security_and_analysis` / vulnerability-alert
+  state at all — confirmed live by testing one issued from `shipsolid-release-bot` (Write-only
+  collaborator access), which read `main` as entirely unprotected and Dependabot/secret-scanning as
+  disabled, neither true. The only account with Admin here is the repository owner's own, and
+  issuing a broad, unrestrictable-to-one-repo classic PAT from that account into an unattended
+  scheduled workflow was judged a worse trade than two permanently-`unavailable` flat fields.
+  `repo_settings.py:33`'s fail-closed design means this keeps `policy-audit.yml` from ever reporting
+  a fully clean `conclusion: "success"` — a red run for exactly these two fields (and nothing else)
+  is the expected, permanent steady state, not a signal to investigate.
