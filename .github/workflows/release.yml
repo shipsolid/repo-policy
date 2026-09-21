@@ -525,6 +525,37 @@ jobs:
           git -c tag.gpgsign=false tag -f "$MAJOR_TAG" "$RELEASE_TAG"
           git push origin "$MAJOR_TAG" --force
 
+      # Local `main` at this point is NOT the commit that triggered this run -- the version-bump
+      # step earlier committed the bump locally, on this same branch, and that local commit was
+      # what got pushed as the release-bot's PR branch. It's also not an ancestor of MERGED_SHA:
+      # GitHub's squash-merge creates a brand new commit on `main`, a sibling of that local bump
+      # commit, not a fast-forward of it. So this reset discards that local (already-pushed,
+      # already-merged, no-longer-needed) commit and replaces it with the real one -- not a
+      # fast-forward, and deliberately so.
+      #
+      # `semantic-release changelog` (the next step) needs local HEAD to actually reach
+      # MERGED_SHA: it builds its release history by walking `git log` from HEAD backwards and
+      # matching commits against tags (`ReleaseHistory.from_git_history`, confirmed by reading its
+      # source), and separately refuses to run at all on a detached HEAD (checked against
+      # `branches.main.match`, which defaults to matching "main" -- confirmed the same way, and
+      # confirmed pyproject.toml's own `branch = "main"` key isn't what's doing this: PSR 9.21.2
+      # doesn't recognize a top-level `branch` key at all). Confirmed by local reproduction: the
+      # exact command below, run with local `main` left at the stale local bump commit, fails with
+      # "tag v0.4.8 not in release history"; the same command, with local `main` reset to the
+      # merged commit first, gets past that check cleanly.
+      #
+      # MERGED_SHA is this pipeline's own captured source of truth for the commit that actually
+      # landed on `main` (see the tag-creation step above), so resetting straight to it is correct
+      # regardless of what else may or may not be true about `main`'s tip at this exact moment.
+      - name: Advance local main to the merged commit
+        if: steps.release.outputs.released == 'true'
+        env:
+          MERGED_SHA: ${{ steps.merge.outputs.merged_sha }}
+        run: |
+          set -euo pipefail
+          git checkout main
+          git reset --hard "$MERGED_SHA"
+
       # PSR's own `version` command can't be safely re-invoked here to create the GitHub Release --
       # it treats an already-existing tag as "nothing to do" and no-ops (confirmed by reading
       # version.py's `previously_released_versions` check), which is exactly what the tag now is,

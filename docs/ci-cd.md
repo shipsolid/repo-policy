@@ -222,6 +222,24 @@ inherited the same way — dropping the Action's `git_committer_name`/`git_commi
 without a replacement was an early draft of this fix, and it was wrong: see the `GIT_COMMIT_AUTHOR`
 note above for why PSR needs that identity told to it explicitly regardless of host git config.
 
+**Why local `main` gets reset before creating the GitHub release:** this job's checkout happens
+once, at the very start, and the version-bump step's local commit (step 4) lands on that same
+local `main` — but GitHub's squash-merge (step 6) creates a brand new commit on the real `main`,
+a *sibling* of that local commit, not a descendant of it. Nothing before "Create the GitHub
+release" ever reconciles the two: the tag-creation step (step 9) creates the release tag directly
+against the captured merge SHA, without touching local `main` at all. `semantic-release changelog
+--post-to-release-tag` (what actually creates the GitHub release) needs local `main` to have
+reached that commit, though — it builds its release history by walking `git log` backwards from
+HEAD and matching commits against tag targets, and it separately refuses to run at all on a
+detached HEAD. Left unreconciled, this pipeline's first three live release attempts all failed at
+this exact step with "tag v0.4.8 not in release history" — a bug unrelated to, and older than, the
+`python-semantic-release` version-pinning incident documented above; it simply never surfaced
+before because no earlier attempt had gotten this far. The fix is a dedicated step,
+`git checkout main && git reset --hard "$MERGED_SHA"`, right before the changelog command runs —
+a hard reset, not a fast-forward, since the two commits are siblings; safe because nothing after
+this point in the job reads local HEAD for anything other than this one command, and `MERGED_SHA`
+is already this pipeline's own captured source of truth for exactly which commit is real.
+
 **Tag protection vs. branch protection (verified, not assumed):** the task that produced this
 redesign started from a documentation-based hypothesis that classic branch protection — the
 `branch_protection` enforcement `repository-policy.yml` declares for `main`, which calls
@@ -391,8 +409,12 @@ deleted on merge by the repository's own `delete_branch_on_merge: true` self-pol
    protection" above), then verifies its own signature with `git verify-tag` before anything below
    runs. The floating major tag (`v0` until a `1.0.0` ships — see README) is force-moved to point at
    it (with tag signing disabled for just that one command — see "Signing config — one `$HOME`,
-   one place it's set" below for why that's necessary and safe), and
-   `semantic-release changelog --post-to-release-tag` creates the GitHub release for it.
+   one place it's set" below for why that's necessary and safe). Local `main` — still sitting at
+   the release-bot's own local bump commit from step 4, a sibling of the real squash-merge commit,
+   not an ancestor of it — is then reset to that captured commit directly (see "Why local `main`
+   gets reset before creating the GitHub release" below for why this step exists and what breaks
+   without it), and only then does `semantic-release changelog --post-to-release-tag` create the
+   GitHub release for it.
 10. The built sdist/wheel (built locally in step 4, before any of the push/PR/merge machinery
     above — their file contents don't change when the surrounding commit gets squashed) are handed
     off (via `actions/upload-artifact` / `download-artifact`) to a separate `publish` job, and
