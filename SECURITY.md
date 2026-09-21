@@ -28,6 +28,7 @@ integration` on branch protection/ruleset endpoints, regardless of what the work
 | Malicious `policy.yml` in a fork's PR, run via `pull_request_target` | Attacker-controlled config gets a privileged token via workflow misconfiguration | Same blast radius as PAT compromise above | Never run repo-policy's `apply` mode on `pull_request_target` against untrusted input; `audit`/`plan` read-only are lower risk but still exercise real API calls with the token |
 | Naming collision: something else creates a ruleset named `repo-policy:<branch>` | `strict` mode's prune logic would treat it as repo-policy-owned and could delete it | Loss of an unrelated ruleset | The naming convention is a documented hard constraint (see `docs/adrs/0004-*`) — don't create rulesets with that prefix outside repo-policy |
 | Attacker who obtains `RELEASE_BOT_TOKEN` or `RELEASE_BOT_SIGNING_KEY` (Task 10) | Open/merge an arbitrary release PR as the release-bot, or forge a signature that verifies as the bot's identity | A malicious, signature-"verified" release published under the bot's name | Both live only as secrets scoped to the protected `release` GitHub Environment (required-reviewer approval, not a plain repository secret) — see "Release Signing" below; `RELEASE_BOT_TOKEN` is a **classic** PAT (not fine-grained — see "Secrets Management" below for why) scoped to `public_repo` only, the narrowest classic scope GitHub offers, issued from the `shipsolid-release-bot` account rather than the human owner's; `public_repo` is coarser than a fine-grained PAT's separately-toggled permissions would have been, but still never full `repo` scope, and the bot's own collaborator access is Write, not Admin, so it can't touch branch protection/ruleset settings even with the token in hand |
+| A consumer pins their workflow to the floating `@v0` Action tag | A compromised or buggy release becomes live in every consuming workflow the moment it's published, with no corresponding diff in the consumer's own repository to review or hold back | Unreviewed supply-chain exposure on every release, for any consumer who chose the moving tag | Documented as a deliberate trade-off, not hidden: README's GitHub Action section leads with the immutable full-commit-SHA form and calls out `@v0` explicitly as movable and unsuitable wherever change control requires a pinned dependency — the same SHA-pinning discipline this repository's own CI enforces (via `zizmor`) on every third-party Action *it* consumes (see `docs/ci-cd.md`). Consumers who need the convenience of automatic updates accept this exposure knowingly, as a choice, not a documentation gap |
 
 ## Authentication
 
@@ -35,6 +36,23 @@ repo-policy authenticates to the GitHub REST API with a single bearer token, res
 from `--token`, `GITHUB_TOKEN`, then `GH_TOKEN` (`cli._resolve_token`). There is no OAuth flow, no
 session, and no credential caching — the token lives only in the process's memory for the
 duration of one invocation.
+
+## Network Path: Proxy Support
+
+`repo-policy`'s `httpx.Client` (`github_client.py`) is constructed with `httpx`'s own defaults —
+`trust_env` is not overridden — so it honors the standard `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/
+`NO_PROXY` environment variables exactly like any other well-behaved `httpx`/`requests`-based tool;
+`socks5://`/`socks5h://` proxy URLs also work, since `httpx[socks]` ships as a hard dependency (see
+`docs/troubleshooting.md` for the corresponding config-error behavior when SOCKS support is
+missing from a mirrored install). This means every request — including the `Authorization: Bearer
+<token>` header — is routed through whatever proxy your environment configures, the same as any
+other HTTPS client running in that environment: an ordinary forward proxy using `CONNECT` tunneling
+never sees inside the TLS session (the token stays opaque to it), but an organization that
+terminates/inspects TLS at its proxy (a corporate MITM proxy with an injected root CA) can observe
+everything a normal HTTPS request carries, including this token. This is standard behavior for any
+HTTPS client, not something specific to how `repo-policy` handles the token — but it's worth stating
+explicitly here since it changes where the token is actually exposed in a given network topology,
+which is relevant to the token-scoping guidance above.
 
 ## Authorization
 

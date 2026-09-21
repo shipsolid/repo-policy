@@ -6,6 +6,7 @@ import sys
 
 import click
 
+from repo_policy import __version__
 from repo_policy.apply import (
     PartialApplyError,
     apply_all,
@@ -117,6 +118,7 @@ def _build_client(
 
 
 @click.group()
+@click.version_option(version=__version__, prog_name="repo-policy")
 def main() -> None:
     """repo-policy: declarative GitHub repository governance."""
 

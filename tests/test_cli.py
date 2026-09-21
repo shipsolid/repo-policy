@@ -1,7 +1,9 @@
+import importlib.metadata
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
+import repo_policy
 from repo_policy.cli import main
 from repo_policy.github_client import GitHubAPIError, GitHubClient
 
@@ -714,3 +716,15 @@ def test_cli_errors_never_leak_the_supplied_token(mock_client_cls):
         assert result.exit_code == 3, result.output
         assert secret_token not in result.output
         assert "Bad credentials" in result.output  # the real GitHub error text still surfaces
+
+
+def test_version_flag_prints_repo_policy_dunder_version_and_exits_0():
+    """`--version` must surface repo_policy.__version__ (not a second, independently-maintained
+    string) -- exercised against the installed package's own metadata rather than a hardcoded
+    literal, so this test can't itself go stale the way __init__.py's hardcoded string once did
+    (see docs/test-strategy.md's "__version__/PyPI version divergence" known bug)."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["--version"])
+    assert result.exit_code == 0
+    assert repo_policy.__version__ in result.output
+    assert importlib.metadata.version("repo-policy") in result.output

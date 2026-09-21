@@ -2,22 +2,31 @@
 
 ## Test Pyramid
 
-215 unit-level tests (mocked via `respx`), organized one file per source module
-(`tests/test_<module>.py`) plus `tests/test_idempotency.py` (one integration-shaped test) and
-`tests/test_policies_parity.py` (a cross-backend regression guard) — plus 3 end-to-end test
-functions in `tests/e2e/` that exercise the real GitHub API against a live, persistent fixture
-repo (`shipsolid/repo-policy-e2e-fixture`): two independent smoke tests (config validation, token/
-repo reachability) and one collapsed lifecycle scenario covering everything else (see "E2E Test
-Isolation and Concurrency Safety" below for why it's one test, not several). The E2E suite is
-excluded from the default `pytest` run (pytest marker `e2e`); run it explicitly with
-`pytest -m e2e` (requires `REPO_POLICY_E2E_TOKEN`), or via the nightly/manual
-`.github/workflows/e2e.yml`.
+A broad mocked unit-level suite (`pytest`, every GitHub API call mocked via `respx`), organized one
+file per source module (`tests/test_<module>.py`), plus two cross-cutting files:
+`tests/test_idempotency.py` (one integration-shaped test proving a second `apply` against an
+already-compliant repo makes zero mutating calls) and `tests/test_policies_parity.py` (a
+parametrized regression guard: for every field in `diff._FIELDS`, both the `branch_protection` and
+`ruleset` backends must respond to it). Run `pytest --collect-only -q | tail -1` for the exact,
+current count — it changes with every test added, so it's deliberately not hardcoded here (see
+"`__version__`/PyPI version divergence" below for what hardcoding a value that's supposed to track
+something else costs this project).
+
+Alongside the mocked suite, 3 end-to-end test functions in `tests/e2e/` exercise the real GitHub
+API against a live, persistent fixture repo (`shipsolid/repo-policy-e2e-fixture`): two independent
+smoke tests (config validation, token/repo reachability) and one collapsed lifecycle scenario
+covering everything else (see "E2E Test Isolation and Concurrency Safety" below for why it's one
+test, not several). The E2E suite is excluded from the default `pytest` run (pytest marker `e2e`);
+run it explicitly with `pytest -m e2e` (requires `REPO_POLICY_E2E_TOKEN`), or via the
+nightly/manual `.github/workflows/e2e.yml`.
 
 ## Approach: TDD throughout
 
 Every module in `src/repo_policy/` was built test-first: write the failing test, watch it fail for
-the expected reason, implement the minimal code to pass, run the full suite, commit. This is
-enforced by convention, not tooling — there's no coverage gate in CI today (see Known Gaps).
+the expected reason, implement the minimal code to pass, run the full suite, commit. The TDD
+discipline itself is enforced by convention, not tooling; the resulting coverage level is enforced
+by CI (`ci.yml`'s `test` job fails under 95% branch coverage — see Known Gaps for what CI does and
+does not gate).
 
 ## What the mocked suite is good at
 
@@ -69,8 +78,9 @@ passed a 100%-green mocked suite before being found:
    response to observe that a value sent in a `PUT` doesn't persist. Fixed by flipping the default
    to `False` (the value GitHub always honors regardless of `lock_branch`) and adding a model
    validator that rejects an explicit `allow_fork_syncing: true` declaration unless `lock_branch:
-   true` is also declared — see
-   `docs/superpowers/plans/2026-09-19-fix-allow-fork-syncing-polarity.md`.
+   true` is also declared — see `CHANGELOG.md`'s "Correct `allow_fork_syncing`'s permissive default
+   from true to false" and "Reject `allow_fork_syncing: true` without `lock_branch: true`" entries
+   for the full fix history.
 
 The pattern across all four: the bug was invisible to any test that only asserted repo-policy's
 own internal consistency. Each one required checking repo-policy's output against an independent,
@@ -79,9 +89,10 @@ real source of truth — a live repo's actual API state, or a real PyPI install.
 ## Manual Verification Checklist (run before any release you don't fully trust)
 
 Steps 1–7 below are now automated in `tests/e2e/test_fixture_repo.py` (run via `pytest -m e2e`,
-or the nightly `.github/workflows/e2e.yml`) — see
-`docs/superpowers/plans/2026-09-20-e2e-fixture-repo-testing.md`. This checklist remains as the
-human-readable reference and manual fallback for anyone without CI access to the fixture repo.
+or the nightly `.github/workflows/e2e.yml`) — see `CHANGELOG.md`'s "Add full E2E lifecycle
+coverage against the live fixture repo" and related entries for the build-out history. This
+checklist remains as the human-readable reference and manual fallback for anyone without CI access
+to the fixture repo.
 
 Against a disposable repository:
 
@@ -145,7 +156,9 @@ addressed structurally, not by convention:
 
 ## Known Gaps
 
-- No CI-enforced coverage threshold.
+- ~~No CI-enforced coverage threshold~~ — closed: `ci.yml`'s `test` job runs
+  `pytest --cov-fail-under=95` on every Python version in the support matrix (3.10–3.14), and
+  `ruff format --check` blocks merging on formatting drift.
 - ~~No automated end-to-end test against a real GitHub repository~~ — closed: see `tests/e2e/`
   and `.github/workflows/e2e.yml`.
 - No test exercises GitHub's classic-branch-protection-specific edge cases beyond what's modeled

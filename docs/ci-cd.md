@@ -15,15 +15,73 @@ verification). The job split, `workflow_call` gating, and permission scoping des
 new in this revision and are pending their first live run — see this repository's audit-remediation
 plan (Task 6) for the local `zizmor` verification performed instead.
 
+### Pipeline flow: gating and permission separation
+
+```
+push to main
+     │
+     ├─────────────────────────────────┐
+     ▼                                  ▼
+ ci.yml (direct trigger)          release.yml
+ contents: read                        │
+ -> "CI / required" status check       ├─ ci  (workflow_call -> re-runs ci.yml's job graph)
+    (what branch protection            │      contents: read
+    requires to merge any PR)          │
+                                        ├─ check-release-warranted  (no environment: gate)
+                                        │      contents: read -- dry-run
+                                        │      `semantic-release --strict version --print-tag`,
+                                        │      zero commit/tag/push side effects
+                                        │
+                                        ▼  (only if ci passed AND a release is warranted)
+                              ┌─────────────────────────────┐
+                              │ release                     │  <- environment: release
+                              │ contents: read (default     │     requires a human's approval
+                              │ token); real writes via     │     click before this job's first
+                              │ secrets.RELEASE_BOT_TOKEN   │     step runs -- RELEASE_BOT_TOKEN /
+                              │ (environment secret)        │     RELEASE_BOT_SIGNING_KEY only
+                              └──────────────┬──────────────┘     materialize on the runner then
+                                             │  version bump -> signed local commit+tag ->
+                                             │  release-bot PR -> squash-merge -> push signed
+                                             │  tag -> `git verify-tag` (fails closed if the
+                                             │  tag isn't verifiably signed)
+                              ┌──────────────┼──────────────┐
+                              ▼                              ▼
+                        publish                          sbom
+                        id-token: write only        contents: read, id-token: write,
+                        (OIDC -> PyPI trusted        attestations: write
+                        publishing; never                  │  CycloneDX SBOMs (wheel install +
+                        checks out the repo)               │  Docker image), Sigstore-backed
+                                                            │  attestations (wheel, sdist, both
+                                                            │  SBOMs, Docker image by digest)
+                                                            ▼
+                                                     release-assets
+                                                     contents: write only (no checkout, no
+                                                     id-token) -- attaches the two SBOM files to
+                                                     the GitHub release `release` already created
+```
+
+No job ever holds both `contents: write` and `id-token: write` at once — see "Permission scoping
+and concurrency" below for why that split specifically matters for PyPI trusted publishing's
+security model, and "SBOM and provenance" for why `sbom`/`release-assets` are two jobs, not one.
+
 ### CI job graph
 
-`ci.yml` splits what used to be one `test` job into five independent jobs — `lint` (`ruff check`),
-`typecheck` (`mypy`), `test` (`pytest`), `build` (`python -m build`, package-validation), and
-`security` (`zizmor --pedantic --offline` against this repo's own workflow YAML) — plus a final
-`required` job that `needs:` all five and fails if any of them failed, were cancelled, or were
-skipped. `required` exists purely to give branch protection and Release a single stable status
-name, `CI / required`, that doesn't change as jobs are added or removed. Each job declares its own
-minimal `permissions:` (`contents: read`); the workflow-level default is `permissions: {}`.
+`ci.yml` splits what used to be one `test` job into nine independent jobs: `lint` (`ruff check` +
+`ruff format --check`), `typecheck` (`mypy`), `test` (`pytest --cov-fail-under=95`, matrixed over
+every Python version `repo-policy` claims to support, 3.10–3.14), `build` (`python -m build`,
+package-validation, and the source of the `dist/` artifact every downstream job reuses),
+`wheel-smoke` (Task 12: installs the actual built wheel — no dev extras, no editable install — into
+clean 3.10 and 3.14 interpreters and smoke-tests the installed CLI), `security` (`zizmor --pedantic
+--offline` against this repo's own workflow YAML), `validate-self-policy` (Task 9: catches a
+malformed `.github/repository-policy.yml` at PR time, before `policy-audit.yml`'s next scheduled
+run would), `verify-action-lock` (Task 7: regenerates `requirements-action.txt`'s hash lock and
+byte-compares it against the checked-in file), and `docker` (Task 7: two clean `--no-cache` builds
+of the Action image, an inventory diff between them, a smoke-test battery against the built image,
+and a Trivy vulnerability scan) — plus a final `required` job that `needs:` all nine and fails if
+any of them failed, were cancelled, or were skipped. `required` exists purely to give branch
+protection and Release a single stable status name, `CI / required`, that doesn't change as jobs
+are added or removed. Each job declares its own minimal `permissions:` (`contents: read`); the
+workflow-level default is `permissions: {}`.
 
 `security` here is narrowly scoped to this repo's own workflow files — it is not dependency
 scanning. `pip-audit`, CodeQL, and a scheduled `security.yml` were the separate, later addition
