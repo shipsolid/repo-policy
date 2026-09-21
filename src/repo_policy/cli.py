@@ -49,9 +49,12 @@ def _resolve_token(token: str | None) -> str:
     return resolved
 
 
-# `github.com` optionally followed by an ~/.ssh/config host-alias suffix (github.com-work), then
-# the `:` of scp-style SSH or the `/` of https:// and ssh://, then exactly owner/name.
-_GITHUB_REMOTE = re.compile(r"github\.com[^/:]*[:/](?P<repo>[^/]+/[^/]+)$")
+# `(?:^|[@/])` anchors on an actual host-start position (start of string, or right after `@`/`/`)
+# so a lookalike domain that merely contains the substring `github.com` -- `mygithub.com`,
+# `github.company.com`, etc. -- never matches; the optional `(?:-[^/:]*)?` is the ~/.ssh/config
+# host-alias suffix (github.com-work), then the `:` of scp-style SSH or the `/` of https:// and
+# ssh://, then exactly owner/name.
+_GITHUB_REMOTE = re.compile(r"(?:^|[@/])github\.com(?:-[^/:]*)?[:/](?P<repo>[^/]+/[^/]+)$")
 
 
 def _resolve_repo(repo: str | None) -> str:
