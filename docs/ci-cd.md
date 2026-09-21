@@ -80,7 +80,7 @@ of the Action image, an inventory diff between them, a smoke-test battery agains
 and a Trivy vulnerability scan) — plus a final `required` job that `needs:` all nine and fails if
 any of them failed, were cancelled, or were skipped. `required` exists purely to give branch
 protection and Release a single stable status name, `required`, that doesn't change as jobs
-are added or removed. Each of the other eight jobs declares its own minimal `permissions:`
+are added or removed. Each of the other nine jobs declares its own minimal `permissions:`
 (`contents: read`); `required` itself needs no permissions (it only evaluates its dependencies'
 outcomes) and declares `permissions: {}`. The workflow-level default is also `permissions: {}`.
 

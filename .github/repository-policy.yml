@@ -76,7 +76,7 @@ branches:
     # an oversight, and cheaper than it first looks. enforce_admins: true means no direct
     # `git push` to main for anyone, including the maintainer -- everything goes through a PR. But
     # approvals: 0 is already set above, so the maintainer can self-merge their own PR the instant
-    # `CI / required` goes green -- there is no second-approver wait to sit through. The real cost
+    # `required` goes green -- there is no second-approver wait to sit through. The real cost
     # is narrow: you're only genuinely blocked when CI itself is broken, which is exactly what the
     # "Emergency recovery" procedure in SECURITY.md exists for. The payoff: force-push protection,
     # deletion protection, and the required CI check all apply to admin-level access too -- no

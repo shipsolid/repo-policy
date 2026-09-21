@@ -77,10 +77,14 @@ mkdir -p /tmp/repo-policy-verify && cd /tmp/repo-policy-verify
 curl -s https://pypi.org/pypi/repo-policy/<version>/json | jq -r '.urls[].url' | xargs -n1 curl -sLO
 gh release download v<version> --repo shipsolid/repo-policy   # the two SBOM files
 
-# 1. Release signature — the release tag itself, SSH-signed by the dedicated release-bot identity
-#    (one-time: register the bot's public key as a trusted signer for its committer email).
-git fetch --tags origin
+# 1. Release signature — the release tag itself, will carry a verifiable SSH signature from the
+#    dedicated release-bot identity once Task 10's signing pipeline is live (one-time: register the
+#    bot's public key as a trusted signer for its committer email). Runs in its own clone, not the
+#    /tmp/repo-policy-verify scratch dir above, since verifying a tag needs an actual repository.
+git clone --quiet https://github.com/shipsolid/repo-policy.git /tmp/repo-policy-verify-git
+cd /tmp/repo-policy-verify-git
 git verify-tag v<version>
+cd /tmp/repo-policy-verify
 
 # 2. GitHub artifact attestations (Sigstore-backed build provenance), against the files fetched in
 #    step 0 above — never a local rebuild

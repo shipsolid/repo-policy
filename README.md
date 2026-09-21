@@ -129,10 +129,10 @@ git rev-parse v<version>^{commit}
 
 or find it at
 [github.com/shipsolid/repo-policy/tags](https://github.com/shipsolid/repo-policy/tags) → click the
-release tag → the commit it points to. (Once the release-bot signing pipeline in `docs/ci-cd.md`'s
-"Release Signing" discussion is live — see `SECURITY.md`'s Release Pipeline Setup Checklist for
-current status — each of these annotated tags will also carry a verifiable SSH signature; that
-doesn't change which SHA to pin here.)
+release tag → the commit it points to. (Once the release-bot signing pipeline in `SECURITY.md`'s
+"Release Signing" section is live — see its Release Pipeline Setup Checklist for current status —
+each of these annotated tags will also carry a verifiable SSH signature; that doesn't change which
+SHA to pin here.)
 
 **Convenience alternative — `@v0`:** a floating tag tracking the current major version (the same
 convention `actions/checkout` and similar Actions use). Each release force-moves it to nest,
