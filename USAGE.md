@@ -592,17 +592,17 @@ pin to the immutable commit it points to instead (the same supply-chain-hardenin
 repository's own CI uses for every third-party Action it consumes):
 
 ```bash
-git rev-parse v0.4.10^{commit}
+git rev-parse v0.5.0^{commit}
 ```
 
-(Replace `v0.4.10` with the release you want. The `^{commit}` suffix matters — release tags here are
-annotated tag objects, so `git rev-parse v0.4.10` alone would return the tag object's own SHA, not
+(Replace `v0.5.0` with the release you want. The `^{commit}` suffix matters — release tags here are
+annotated tag objects, so `git rev-parse v0.5.0` alone would return the tag object's own SHA, not
 the commit's, silently defeating the point of pinning.)
 
 **Step C — Add the workflow step:**
 
 ```yaml
-- uses: shipsolid/repo-policy@a4d736b7fa8268115f50e61b4398d8d6a7ee7e1a # v0.4.10
+- uses: shipsolid/repo-policy@5dcf57b3b2eb12e5b878f70b7119c26d86788c23 # v0.5.0
   env:
     GITHUB_TOKEN: ${{ secrets.REPO_POLICY_TOKEN }}
   with:

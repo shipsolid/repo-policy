@@ -1,0 +1,43 @@
+name: Check Release Pins
+
+# Verifies README.md's and USAGE.md's `shipsolid/repo-policy@<sha> # <tag>` Action-pin examples
+# stay in sync with the latest release tag -- see scripts/verify-release-pins.sh
+# (AUDIT-GAPS.md's TASK-001, closing FINDING-001/FINDING-002).
+#
+# Deliberately not a pull_request-triggered, PR-blocking check: a new release tag can land (via
+# release.yml, on push to main) without a matching docs update in the same PR, and a
+# pull_request-triggered check would then block every unrelated PR the moment that happens until
+# someone notices and fixes the docs -- a false-failure mode with no corresponding real drift.
+# Schedule + push-to-main-on-doc-change instead, mirroring policy-audit.yml's advisory pattern for
+# the same reason.
+on:
+  schedule:
+    - cron: "0 8 * * *" # daily, offset from policy-audit.yml's 07:00 UTC
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "USAGE.md"
+      - "scripts/verify-release-pins.sh"
+      - ".github/workflows/check-release-pins.yml"
+  workflow_dispatch: {} # manual re-run, e.g. right after fixing a reported drift
+
+concurrency:
+  group: check-release-pins-${{ github.ref }}
+  cancel-in-progress: false
+
+# No job inherits repo-default permissions; the job below declares exactly what it needs.
+permissions: {}
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # needs full tag history for `git describe --tags` to find the latest release
+          persist-credentials: false
+      - run: bash scripts/verify-release-pins.sh

@@ -157,7 +157,7 @@ third-party Action it consumes (see `.github/workflows/ci.yml`), and the general
 hardening recommendation for any Action, including this one:
 
 ```yaml
-- uses: shipsolid/repo-policy@a4d736b7fa8268115f50e61b4398d8d6a7ee7e1a # v0.4.7
+- uses: shipsolid/repo-policy@5dcf57b3b2eb12e5b878f70b7119c26d86788c23 # v0.5.0
   env:
     GITHUB_TOKEN: ${{ secrets.REPO_POLICY_TOKEN }}
   with:
@@ -175,17 +175,15 @@ git rev-parse v<version>^{commit}
 ```
 
 or find it at [github.com/shipsolid/repo-policy/tags](https://github.com/shipsolid/repo-policy/tags)
-→ click the release tag → the commit it points to. (Once the release-bot signing pipeline in
-`SECURITY.md`'s "Release Signing" section is live — see its Release Pipeline Setup Checklist for
-current status — each of these annotated tags will also carry a verifiable SSH signature; that
-doesn't change which SHA to pin here.)
+→ click the release tag → the commit it points to. The release-bot signing pipeline in
+`SECURITY.md`'s "Release Signing" section is live (since `v0.4.9`) — each of these annotated tags
+also carries a verifiable SSH signature; that doesn't change which SHA to pin here.
 
 **Convenience alternative — `@v0`:** a floating tag tracking the current major version (the same
 convention `actions/checkout` and similar Actions use). Each release force-moves it to nest,
 unpeeled, directly on top of that release's own annotated tag object (`v0` → `v<version>` → the
-release commit) — this nesting is what will let `git verify-tag v0` keep verifying transitively
-against the release-bot's signature after every move, once that signing pipeline is live (see
-`docs/ci-cd.md`).
+release commit) — this nesting is what lets `git verify-tag v0` keep verifying transitively against
+the release-bot's signature after every move (see `docs/ci-cd.md`).
 
 ```yaml
 - uses: shipsolid/repo-policy@v0
