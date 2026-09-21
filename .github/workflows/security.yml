@@ -44,6 +44,16 @@ jobs:
       - name: Audit the Docker Action's locked, hash-pinned dependency set
         run: pip-audit -r requirements-action.txt --require-hashes
 
+      # requirements-release.txt is a third, independently-locked dependency set (the release
+      # pipeline's python-semantic-release install -- see requirements-release.in/.txt and
+      # scripts/verify-release-lock.sh). --ignore-vuln PYSEC-2026-2132 suppresses one specific,
+      # already-triaged finding (click==8.1.8, pulled in by python-semantic-release==9.21.2's own
+      # `click~=8.1.0` constraint, which caps click below the 8.3.3 fix) -- an accepted,
+      # upstream-blocked risk, not a silent skip. See SECURITY.md's "Known Limitations" for the
+      # full triage and the condition for revisiting it.
+      - name: Audit the release pipeline's locked, hash-pinned dependency set
+        run: pip-audit -r requirements-release.txt --require-hashes --ignore-vuln PYSEC-2026-2132
+
   zizmor:
     name: zizmor
     runs-on: ubuntu-latest

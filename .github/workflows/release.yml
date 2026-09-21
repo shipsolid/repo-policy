@@ -84,7 +84,7 @@ jobs:
         id: check
         run: |
           set -euo pipefail
-          pip install --quiet "python-semantic-release==9.21.2"
+          pip install --quiet --require-hashes -r requirements-release.txt
           if semantic-release --strict version --print-tag; then
             echo "warranted=true" >> "$GITHUB_OUTPUT"
           else
@@ -244,7 +244,7 @@ jobs:
           GIT_COMMIT_AUTHOR: "shipsolid-release-bot <amitsingh007s+repopolicybot@gmail.com>"
         run: |
           set -euo pipefail
-          pip install --quiet "python-semantic-release==9.21.2"
+          pip install --quiet --require-hashes -r requirements-release.txt
           if tag="$(semantic-release --strict version --print-tag)"; then
             echo "released=true" >> "$GITHUB_OUTPUT"
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -597,7 +597,7 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
-          pip install --quiet "python-semantic-release==9.21.2"
+          pip install --quiet --require-hashes -r requirements-release.txt
           semantic-release changelog --post-to-release-tag "$RELEASE_TAG"
 
   publish:

@@ -134,7 +134,7 @@ restrict itself to a subset. This is why token scoping (above) is the primary co
 
 | Check | Tool | Runs | Scope |
 |---|---|---|---|
-| Dependency vulnerabilities | `pip-audit` | Every PR, every push to `main`, weekly (`.github/workflows/security.yml`) | This project's own dependencies (`pyproject.toml`) and the Docker Action's locked, hash-pinned dependency set (`requirements-action.txt`) |
+| Dependency vulnerabilities | `pip-audit` | Every PR, every push to `main`, weekly (`.github/workflows/security.yml`) | This project's own dependencies (`pyproject.toml`), the Docker Action's locked, hash-pinned dependency set (`requirements-action.txt`), and the release pipeline's locked, hash-pinned dependency set (`requirements-release.txt`) |
 | Static code analysis | CodeQL (`python`, `actions`) | Every PR, every push to `main`, weekly | `src/`, `tests/`, and `.github/workflows/*.yml` |
 | Workflow YAML security | `zizmor --pedantic` | Every PR, every push to `main` (`ci.yml`'s `security` job, PR-blocking), weekly again (`security.yml`, advisory) | `.github/workflows/*.yml` |
 | Container image vulnerabilities | Trivy (Task 7) | Every PR, every push to `main` (`ci.yml`'s `docker` job) | The Docker Action image, `CRITICAL` blocking / `CRITICAL,HIGH` reported |
@@ -544,3 +544,12 @@ audited, time-boxed repository-settings change, not something `repo-policy` itse
   workflow" section for why CodeQL's Python analysis is the automated static-analysis coverage
   instead) — there is no gate for a source-level suppression to silence, only this note for the
   next person who runs `bandit` locally and sees the same finding.
+- `pip-audit -r requirements-release.txt --require-hashes` reports one finding, `PYSEC-2026-2132`
+  (`click==8.1.8`), suppressed in CI via `--ignore-vuln PYSEC-2026-2132`
+  (`.github/workflows/security.yml`'s "Audit the release pipeline's locked, hash-pinned dependency
+  set" step). This is an accepted, upstream-blocked risk, not a false positive: `click==8.1.8` is
+  genuinely vulnerable, but `python-semantic-release==9.21.2`'s own wheel metadata declares
+  `Requires-Dist: click~=8.1.0`, which caps click below the `8.3.3` fix — this project cannot
+  resolve a patched click into `requirements-release.txt` without python-semantic-release itself
+  relaxing that constraint. Revisit when python-semantic-release publishes a release that allows a
+  patched click, or when this project moves off `python-semantic-release==9.21.2`.

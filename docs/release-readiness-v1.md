@@ -267,13 +267,18 @@ requiring a follow-up decision rather than a mechanical fix):
 - **A handful of stale `"CI / required"` prose references remain in `release.yml`'s own comments**
   (lines outside the files Task 13's documentation pass touched) — cosmetic, non-functional, no
   machine reads these strings.
-- **`python-semantic-release`'s own transitive dependencies are not hash-pinned** — only the
-  top-level `python-semantic-release==9.21.2` version is pinned at all three call sites. This is the
-  same class of gap as the incident this task's Step 9 documents in detail, one level narrower (this
-  project already hash-pins its own distributed Action's dependencies via
-  `requirements-action.txt`; PSR's own dependency tree does not get the same treatment). Flagged as
-  a candidate follow-up, not fixed here, given the stakes of touching the release pipeline again
-  immediately after finally getting it working.
+- **`python-semantic-release`'s transitive dependencies are now hash-pinned.** Previously only the
+  top-level `python-semantic-release==9.21.2` version was pinned at all three call sites; a live
+  audit (`AUDIT-GAPS.md`, FINDING-004/TASK-003) found this left ~29 unpinned, unscanned transitive
+  dependencies reachable from the `release` job's credentials, including a then-current known
+  vulnerability (`PYSEC-2026-2132` in `click==8.1.8`). Closed the same way this project already
+  hash-pins its distributed Action's dependencies (`requirements-action.txt` +
+  `scripts/verify-action-lock.sh`): `requirements-release.in`/`.txt` +
+  `scripts/verify-release-lock.sh`, a `verify-release-lock` CI job (`ci.yml`), and a dedicated
+  `pip-audit -r requirements-release.txt --require-hashes` step (`security.yml`). The one remaining
+  finding in that lock (`PYSEC-2026-2132`) is upstream-blocked — python-semantic-release 9.21.2's
+  own `click~=8.1.0` constraint caps click below the fix — and is explicitly triaged, not silently
+  ignored; see `SECURITY.md`'s "Known Limitations".
 - **Several Minor findings from Tasks 11-13's reviews remain parked** (test-coverage gaps in the
   E2E suite's ruleset-side PR-parameter assertions, `e2e.yml`'s missing `permissions:` block, a
   couple of stale doc cross-references) — none functional, all previously triaged and explicitly
