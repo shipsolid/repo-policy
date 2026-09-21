@@ -1,10 +1,11 @@
 import importlib.metadata
 from unittest.mock import MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
 import repo_policy
-from repo_policy.cli import main
+from repo_policy.cli import _resolve_repo, main
 from repo_policy.github_client import GitHubAPIError, GitHubClient
 
 
@@ -748,3 +749,19 @@ def test_audit_reports_flat_setting_unavailable_instead_of_false_drift(mock_clie
     assert result.exit_code == 1
     assert "repo settings: delete_branch_on_merge unavailable on this repository" in result.output
     assert "change(s) required" not in result.output
+
+
+@pytest.mark.parametrize(
+    "remote_url",
+    [
+        "git@github.com:acme/widgets.git",
+        "https://github.com/acme/widgets.git",
+        "ssh://git@github.com/acme/widgets",
+        "git@github.com-work:acme/widgets.git",  # ~/.ssh/config host alias
+    ],
+)
+def test_resolve_repo_parses_every_supported_origin_url_shape(remote_url, monkeypatch):
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    with patch("repo_policy.cli.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=remote_url + "\n", stderr="")
+        assert _resolve_repo(None) == "acme/widgets"

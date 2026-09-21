@@ -27,6 +27,11 @@ None of `--repo`, `$GITHUB_REPOSITORY`, or a `git remote get-url origin` in the 
 resolved to a repository. This also fires if `git` isn't installed and no `--repo`/
 `$GITHUB_REPOSITORY` was supplied.
 
+Recognised `origin` shapes: `git@github.com:owner/name`, `https://github.com/owner/name`,
+`ssh://git@github.com/owner/name`, and SSH host aliases like `git@github.com-work:owner/name`,
+each with or without `.git`. Anything else (a GitHub Enterprise host, a non-GitHub remote) needs
+`--repo`.
+
 ## `policy file not found: <path>` / `policy file is empty: <path>`
 
 Check `--config`'s path is correct relative to your current working directory (CLI) or the

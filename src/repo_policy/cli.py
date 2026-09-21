@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 
@@ -48,6 +49,11 @@ def _resolve_token(token: str | None) -> str:
     return resolved
 
 
+# `github.com` optionally followed by an ~/.ssh/config host-alias suffix (github.com-work), then
+# the `:` of scp-style SSH or the `/` of https:// and ssh://, then exactly owner/name.
+_GITHUB_REMOTE = re.compile(r"github\.com[^/:]*[:/](?P<repo>[^/]+/[^/]+)$")
+
+
 def _resolve_repo(repo: str | None) -> str:
     if repo:
         return repo
@@ -62,11 +68,10 @@ def _resolve_repo(repo: str | None) -> str:
         raise _config_error("could not determine repository; pass --repo owner/name") from None
     if result.returncode != 0:
         raise _config_error("could not determine repository; pass --repo owner/name") from None
-    url = result.stdout.strip()
-    url = url.removesuffix(".git")
-    for separator in ("github.com:", "github.com/"):
-        if separator in url:
-            return url.split(separator, 1)[1]
+    url = result.stdout.strip().removesuffix(".git")
+    match = _GITHUB_REMOTE.search(url)
+    if match:
+        return match.group("repo")
     raise _config_error("could not determine repository; pass --repo owner/name")
 
 
