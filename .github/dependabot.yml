@@ -44,3 +44,10 @@ updates:
     labels: ["dependencies", "security"]
     cooldown:
       default-days: 7
+    # requirements-action.txt is hash-locked for `--python-version 3.12` (see
+    # scripts/verify-action-lock.sh), so a Python minor/major bump of the base image can never
+    # merge on its own -- it needs a deliberate lock regeneration in the same PR. Patch bumps
+    # (3.12.x -> 3.12.y, and the digest with them) still flow through here weekly.
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
