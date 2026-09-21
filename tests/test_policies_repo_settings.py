@@ -38,18 +38,63 @@ def test_to_flat_settings_payload_builds_dict_from_changes():
 def test_diff_security_and_analysis_detects_change():
     current_repo = {"security_and_analysis": {"secret_scanning": {"status": "disabled"}}}
     desired = RepoSettingsPolicy(secret_scanning=True)
-    changes = repo_settings.diff_security_and_analysis(current_repo, desired)
+    changes, unavailable = repo_settings.diff_security_and_analysis(current_repo, desired)
+    assert unavailable == []
     assert len(changes) == 1
     assert changes[0].field == "secret_scanning"
     assert changes[0].action == "add"
 
 
-def test_diff_security_and_analysis_treats_absent_block_as_disabled():
-    current_repo = {}  # no security_and_analysis key at all
+def test_diff_security_and_analysis_treats_present_empty_block_as_disabled():
+    """The block IS present (not None) but has no sub-keys -- e.g. a repo where these features
+    were simply never configured. Distinct from the block being wholly absent due to token scope
+    (see test_diff_security_and_analysis_reports_unavailable_when_block_absent below): this
+    legitimately means 'disabled', matching GitHub's documented default, so it still produces a
+    real, diffable Change rather than 'unavailable'."""
+    current_repo = {"security_and_analysis": {}}
     desired = RepoSettingsPolicy(secret_scanning=True)
-    changes = repo_settings.diff_security_and_analysis(current_repo, desired)
+    changes, unavailable = repo_settings.diff_security_and_analysis(current_repo, desired)
+    assert unavailable == []
     assert len(changes) == 1
     assert changes[0].current_value is False
+    assert changes[0].action == "add"
+
+
+def test_diff_security_and_analysis_reports_unavailable_when_block_absent():
+    """Bug fix: current_repo.get("security_and_analysis") is None (the key is missing entirely,
+    not an empty dict) when the authenticated token lacks permission to see this field -- e.g. a
+    fine-grained PAT scoped to Administration: Read-only. That must not be conflated with the
+    block being present and the features genuinely disabled: both declared fields are
+    structurally undeterminable, so both land in `unavailable` and neither produces a false
+    'add' Change."""
+    current_repo = {}  # no security_and_analysis key at all
+    desired = RepoSettingsPolicy(secret_scanning=True, secret_scanning_push_protection=True)
+    changes, unavailable = repo_settings.diff_security_and_analysis(current_repo, desired)
+    assert changes == []
+    assert sorted(unavailable) == ["secret_scanning", "secret_scanning_push_protection"]
+
+
+def test_diff_security_and_analysis_skips_undeclared_fields_when_block_absent():
+    """Mirrors diff_toggle/diff_flat_settings' existing 'not declared -- don't touch' rule: only
+    fields actually wanted by the policy should ever show up in `unavailable`."""
+    current_repo = {}  # no security_and_analysis key at all
+    desired = RepoSettingsPolicy(secret_scanning=True)  # push protection left unset
+    changes, unavailable = repo_settings.diff_security_and_analysis(current_repo, desired)
+    assert changes == []
+    assert unavailable == ["secret_scanning"]
+
+
+def test_diff_security_and_analysis_empty_when_already_compliant():
+    current_repo = {
+        "security_and_analysis": {
+            "secret_scanning": {"status": "enabled"},
+            "secret_scanning_push_protection": {"status": "enabled"},
+        }
+    }
+    desired = RepoSettingsPolicy(secret_scanning=True, secret_scanning_push_protection=True)
+    changes, unavailable = repo_settings.diff_security_and_analysis(current_repo, desired)
+    assert changes == []
+    assert unavailable == []
 
 
 def test_to_security_and_analysis_payload_builds_status_wrapped_dict():
@@ -57,7 +102,8 @@ def test_to_security_and_analysis_payload_builds_status_wrapped_dict():
         "security_and_analysis": {"secret_scanning_push_protection": {"status": "enabled"}}
     }
     desired = RepoSettingsPolicy(secret_scanning=True, secret_scanning_push_protection=False)
-    changes = repo_settings.diff_security_and_analysis(current_repo, desired)
+    changes, unavailable = repo_settings.diff_security_and_analysis(current_repo, desired)
+    assert unavailable == []
     payload = repo_settings.to_security_and_analysis_payload(changes)
     assert payload == {
         "secret_scanning": {"status": "enabled"},

@@ -238,6 +238,27 @@ def test_apply_repo_settings_applies_secret_scanning_when_ghas_licensed():
     )
 
 
+def test_plan_repo_settings_records_unavailable_for_secret_scanning_when_block_absent():
+    """Bug fix: a token without permission to see security_and_analysis on GET
+    /repos/{owner}/{repo} (e.g. a fine-grained PAT scoped to Administration: Read-only) gets NO
+    security_and_analysis key at all -- not an empty dict. That must never be conflated with the
+    block being present and the features being genuinely disabled: both declared fields are
+    structurally undeterminable here, so they belong in `unavailable`, not reported as false
+    'add' changes (which would be a false positive drift report)."""
+    client = MagicMock()
+    client.get_repo.return_value = {}  # no security_and_analysis key -- token can't see it
+    config = PolicyConfig(
+        version=1,
+        branches={},
+        repo_settings=RepoSettingsPolicy(
+            secret_scanning=True, secret_scanning_push_protection=True
+        ),
+    )
+    result = plan_repo_settings(client, config)
+    assert result.changes == []
+    assert sorted(result.unavailable) == ["secret_scanning", "secret_scanning_push_protection"]
+
+
 def test_apply_repo_settings_enables_alerts_before_security_fixes():
     """Both fields are drifted in the same apply -- vulnerability_alerts must be enabled first,
     since GitHub rejects enabling automated_security_fixes before it."""
