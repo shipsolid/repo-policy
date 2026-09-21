@@ -18,11 +18,22 @@ concurrency:
   group: repo-policy-e2e-fixture
   cancel-in-progress: false
 
+# No job inherits repo-default permissions; the job below declares exactly what it needs -- the
+# same convention ci.yml, release.yml, security.yml and policy-audit.yml already follow. The live
+# suite authenticates to GitHub with REPO_POLICY_E2E_TOKEN (a fine-grained PAT scoped to the fixture
+# repo), never with this workflow's GITHUB_TOKEN, so `contents: read` for checkout is all it needs.
+permissions: {}
+
 jobs:
   e2e:
+    name: e2e
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # nothing here pushes; the suite only talks to the REST API
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
