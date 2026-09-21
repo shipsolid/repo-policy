@@ -1,6 +1,123 @@
 # CHANGELOG
 
 
+## v0.5.0 (2026-09-21)
+
+### Bug Fixes
+
+- Release job detaches HEAD before computing the version bump
+  ([#25](https://github.com/shipsolid/repo-policy/pull/25),
+  [`426acce`](https://github.com/shipsolid/repo-policy/commit/426accecc2e066afeae444106a4e40cfdd11e7f1))
+
+The "Fast-forward to main's current tip" step ran `git checkout origin/main` -- checking out the
+  remote-tracking ref directly leaves the working tree in detached HEAD state, distinct from `git
+  checkout main`. semantic-release's `branch = "main"` config (pyproject.toml) refuses to compute a
+  version there: "Detached HEAD state cannot match any release groups" (confirmed live -- run
+  35652737004, triggered by PR #24 landing on main).
+
+The job's own initial `actions/checkout` (no `ref:` override) already leaves HEAD attached to local
+  `main` for a push-to-main trigger; this step only needs to fast-forward that local branch to
+  origin/main's current tip (in case other PRs merged while the job sat at the environment-approval
+  gate), not re-checkout anything. `git merge --ff-only origin/main` does that while staying on the
+  branch, and still fails loudly under this step's existing `set -euo pipefail` if origin/main
+  somehow isn't a fast-forward -- the same safety property the checkout-based version accidentally
+  had.
+
+Confirmed via grep this was the only `checkout origin/<branch>` occurrence across every workflow
+  file.
+
+Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>
+
+### Chores
+
+- Update ([#22](https://github.com/shipsolid/repo-policy/pull/22),
+  [`e9d199f`](https://github.com/shipsolid/repo-policy/commit/e9d199f8eee74c45bf48d905a2cc7dec73144bdc))
+
+- Update ([#23](https://github.com/shipsolid/repo-policy/pull/23),
+  [`eb7e70e`](https://github.com/shipsolid/repo-policy/commit/eb7e70ed9c27511a42fe4691b919a9367e1c74d9))
+
+### Continuous Integration
+
+- Fast-forward the release job to main before computing the version bump
+  ([`d8b9862`](https://github.com/shipsolid/repo-policy/commit/d8b98620a5e88dafe6e4a4a47c045e5b2ba32444))
+
+The release job's checkout defaults to github.sha, frozen at trigger time, but the job can sit for
+  up to 45 minutes at the release environment's human-approval gate. Any commit that merges to main
+  in that window -- including this session's own Task 4 -- leaves the version-bump commit built on
+  stale state, which GitHub's PAT-workflow-scope protection correctly rejected on 2026-09-21 (run
+  35633848337) once a workflow file had changed in the interim. Fast-forward to origin/main's
+  current tip right before computing the bump, and rebind the 'only touched version/changelog files'
+  validation to the same fresh baseline, so the release commit's tree can never disagree with main
+  on any path.
+
+Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>
+
+### Features
+
+- Pr-review actor-list fields and gh CLI token fallback
+  ([#24](https://github.com/shipsolid/repo-policy/pull/24),
+  [`e9893c0`](https://github.com/shipsolid/repo-policy/commit/e9893c08f30ab118a396954e5e4b5d71a84c22e3))
+
+* feat: model dismissal_restrictions and bypass_pull_request_allowances
+
+GitHub's "Restrict who can dismiss pull request reviews" and "Allow specified actors to bypass
+  required pull requests" were previously read-through-preserved only (policies/pull_requests.py
+  could never declare either) -- both are now fully modeled PullRequestPolicy sub-fields, following
+  the exact migration pattern commit 41e59cb used for
+  dismiss_stale_reviews/require_last_push_approval.
+
+Both are nested inside pull_requests, not their own top-level BranchPolicy field -- they only mean
+  anything when pull_requests.required: true, so nesting gets that "meaningless when not required"
+  case handled for free via to_branch_protection's existing early return. Neither has a GitHub
+  Rulesets equivalent; a new, separately-named BranchPolicy validator
+  (_reject_ruleset_unsupported_pull_request_fields) rejects declaring either under enforcement:
+  ruleset, since the existing FIELD_SPECS/ _RULESET_UNSUPPORTED_FIELDS mechanism only tracks
+  top-level field names.
+
+An explicitly-declared actor list must name at least one user/team(/app) -- an all-empty declaration
+  is rejected at validate time rather than sent to GitHub, since this session had no live GitHub
+  access to confirm whether GitHub's API treats a freshly-authored empty allow-list as "no
+  restriction" or "restrict to nobody." See docs/adrs/0005-nested-actor-list-fields.md for the full
+  reasoning, including the resulting known gap: audit/plan/apply now fail with PolicyResolutionError
+  for a branch whose *live* GitHub state happens to carry an all-empty-but-present value for either
+  field. Flagged in ROADMAP.md as needing live e2e verification once a real identity for
+  shipsolid/repo-policy-e2e-fixture is available.
+
+dismissal_restrictions supports only users/teams (no apps field at all, matching GitHub's real API);
+  bypass_pull_request_allowances supports users/teams/apps -- the mechanism for letting a release
+  bot or Dependabot merge without a human review.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
+* feat: fall back to gh auth token for local CLI use
+
+_resolve_token previously only checked --token, GITHUB_TOKEN, and GH_TOKEN -- a user running
+  repo-policy locally had to manually export a token even when already logged in via `gh auth
+  login`. Adds a fourth, silent, last-resort fallback: _gh_cli_token() shells out to `gh auth
+  token`, mirroring _resolve_repo's existing `git remote get-url origin` fallback exactly
+  (subprocess.run with check=False, FileNotFoundError for a missing binary, returncode checked
+  before trusting stdout).
+
+Only reached when all three explicit sources are absent -- an intentional flag or env var always
+  wins. Verified end-to-end against the real GitHub API (audit against shipsolid/repo-policy with
+  GITHUB_TOKEN/GH_TOKEN unset, using this machine's real `gh` login). Pure local-CLI convenience:
+  GitHub Actions usage is unaffected, since an Actions runner never has an interactive `gh auth
+  login` session to reuse and already requires an explicit token regardless.
+
+Caught and fixed a real test fragility while implementing:
+  test_audit_reports_usage_error_when_no_token_configured only deleted GITHUB_TOKEN/GH_TOKEN, so on
+  any machine with `gh` actually logged in (this dev machine included) it would have started passing
+  for the wrong reason -- now also mocks `gh auth token` to fail, restoring a deterministic "no
+  token available at all" scenario.
+
+SECURITY.md documents the new trust boundary this introduces (shelling out to whatever `gh` binary
+  is first on PATH) explicitly, rather than leaving it implicit.
+
+---------
+
+Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>
+
+
 ## v0.4.10 (2026-09-21)
 
 ### Bug Fixes
@@ -52,6 +169,9 @@ Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>
 
 - Update ([#14](https://github.com/shipsolid/repo-policy/pull/14),
   [`71c0268`](https://github.com/shipsolid/repo-policy/commit/71c0268b9cfa12e58940ea01bd1431529c55f8df))
+
+- **release**: V0.4.10 [skip ci]
+  ([`82516ca`](https://github.com/shipsolid/repo-policy/commit/82516ca849d9daf0bc1c2fcd803da74047e55e15))
 
 ### Continuous Integration
 
