@@ -11,7 +11,8 @@ form rather than opening a public issue. We'll acknowledge within 5 business day
 `repo-policy` requires a GitHub token with `repo` (or fine-grained `administration:write`)
 permissions to manage branch protection and rulesets. Treat that token with the same care as any
 credential capable of changing repository security settings. The tool never stores the token —
-it is read once per invocation from `--token`, `GITHUB_TOKEN`, or `GH_TOKEN`.
+it is read once per invocation from `--token`, `GITHUB_TOKEN`, `GH_TOKEN`, or, as a local-only
+last resort, `gh auth token` (see "Authentication" below).
 
 **In GitHub Actions, this must be a real PAT stored as a repository secret — never the
 automatically-generated `secrets.GITHUB_TOKEN`.** Confirmed against a real workflow run:
@@ -33,9 +34,20 @@ integration` on branch protection/ruleset endpoints, regardless of what the work
 ## Authentication
 
 repo-policy authenticates to the GitHub REST API with a single bearer token, resolved in order
-from `--token`, `GITHUB_TOKEN`, then `GH_TOKEN` (`cli._resolve_token`). There is no OAuth flow, no
-session, and no credential caching — the token lives only in the process's memory for the
-duration of one invocation.
+from `--token`, `GITHUB_TOKEN`, `GH_TOKEN`, then — as a last resort, local-CLI-only convenience —
+`gh auth token` (`cli._resolve_token`/`cli._gh_cli_token`). There is no OAuth flow, no session,
+and no credential caching — the token lives only in the process's memory for the duration of one
+invocation, regardless of which of the four sources it came from.
+
+The fourth source is a new trust boundary worth naming explicitly: it shells out to whatever
+binary named `gh` is first on `PATH` and trusts its stdout as a credential. This is only ever
+reached when none of the first three sources are set (an explicit `--token`/env var always wins),
+and it's the exact same mechanism any other tool that shells out to `gh auth token` relies on —
+but a `PATH` an attacker can influence (e.g. a compromised dev shell, a poisoned CI runner image)
+could substitute a malicious `gh` and have repo-policy pick up a token of the attacker's choosing.
+GitHub Actions workflows are unaffected in practice: they never have an interactive `gh auth
+login` session to reuse, so this path is never reached there — Actions usage already requires an
+explicit `GITHUB_TOKEN`/`GH_TOKEN`/`--token` regardless (see "In GitHub Actions" above).
 
 ## Network Path: Proxy Support
 

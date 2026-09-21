@@ -44,9 +44,34 @@ def _config_error(message: str) -> click.ClickException:
 
 def _resolve_token(token: str | None) -> str:
     resolved = token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if not resolved:
-        raise _config_error("no GitHub token found; pass --token or set GITHUB_TOKEN/GH_TOKEN")
-    return resolved
+    if resolved:
+        return resolved
+    resolved = _gh_cli_token()
+    if resolved:
+        return resolved
+    raise _config_error(
+        "no GitHub token found; pass --token, set GITHUB_TOKEN/GH_TOKEN, or run `gh auth login`"
+    )
+
+
+def _gh_cli_token() -> str | None:
+    """Last-resort local-dev convenience: reuse an existing `gh auth login` session by shelling
+    out to `gh auth token`, the GitHub CLI's own documented way to print its currently-active
+    token. Mirrors _resolve_repo's `git remote get-url origin` fallback below exactly
+    (subprocess.run with check=False, FileNotFoundError for a missing binary, returncode checked
+    before trusting stdout) -- same shape, same reasoning. Never raises: gh not installed, not
+    logged in, or logged into the wrong host are all just "this fallback didn't work," not a hard
+    failure -- _resolve_token's own error message is what a caller ultimately sees if every
+    source failed."""
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token"], capture_output=True, text=True, check=False
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 # `(?:^|[@/])` anchors on an actual host-start position (start of string, or right after `@`/`/`)

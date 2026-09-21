@@ -88,8 +88,9 @@ repo-policy apply --repo acme/widgets
 | `plan`      | `--config`, `--repo`, `--token`   | Same diff engine as `audit`, renders a human-readable +/-/~/✓ preview                                          | same as `audit`                                                                                                                                                                               |
 | `apply`     | `--config`, `--repo`, `--token`   | Executes only the changes `plan` would show, then re-verifies live state from scratch before reporting success | 0 mutations converged (incl. no-op), 1 mutations succeeded but a fresh post-apply check still finds drift, 2 invalid config or setup failure, 3 API/auth error or partial-application failure |
 
-**Token resolution order:** `--token` → `GITHUB_TOKEN` → `GH_TOKEN`. **Repo resolution order:**
-`--repo owner/name` → `$GITHUB_REPOSITORY` → the local git `origin` remote.
+**Token resolution order:** `--token` → `GITHUB_TOKEN` → `GH_TOKEN` → `gh auth token` (a local
+`gh` CLI login, tried last and only as a convenience — see [SECURITY.md](SECURITY.md)). **Repo
+resolution order:** `--repo owner/name` → `$GITHUB_REPOSITORY` → the local git `origin` remote.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md)'s "Apply Outcomes and Exit Codes" for the full preflight /
 mutate / verify breakdown behind `apply`'s row above.

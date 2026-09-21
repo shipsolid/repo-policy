@@ -258,6 +258,12 @@ for one in this order (first one found wins):
 1. `--token` flag, passed directly on the command line
 2. `GITHUB_TOKEN` environment variable
 3. `GH_TOKEN` environment variable
+4. `gh auth token` — a **silent, last-resort fallback**: if you're already logged in locally via
+   the [GitHub CLI](https://cli.github.com/) (`gh auth login`), `repo-policy` reuses that session
+   automatically. It's only ever tried when none of the first three are set, so it never overrides
+   an explicit `--token`/env var, and it changes nothing about how the GitHub Action authenticates
+   (see [Step 15](#15-running-repo-policy-inside-github-actions) — Actions always need an explicit
+   token regardless).
 
 For **this guide's Steps 5 and 6** (`audit` and `plan` — both read-only), a token with read access
 to the repository is enough. For **Step 7** (`apply`), the token needs write access to

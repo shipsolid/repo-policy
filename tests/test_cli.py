@@ -6,7 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 import repo_policy
-from repo_policy.cli import _resolve_repo, main
+from repo_policy.cli import _resolve_repo, _resolve_token, main
 from repo_policy.github_client import GitHubAPIError, GitHubClient
 
 
@@ -306,10 +306,16 @@ def test_audit_reports_usage_error_when_repo_cannot_be_resolved(
     mock_client_cls.assert_not_called()
 
 
+@patch("repo_policy.cli.subprocess.run")
 @patch("repo_policy.cli.GitHubClient")
-def test_audit_reports_usage_error_when_no_token_configured(mock_client_cls, monkeypatch):
+def test_audit_reports_usage_error_when_no_token_configured(mock_client_cls, mock_run, monkeypatch):
+    """Must also fail the `gh auth token` fallback (not just delete GITHUB_TOKEN/GH_TOKEN) --
+    otherwise this test's correctness would silently depend on whether the machine running it
+    happens to have a `gh` CLI logged in, rather than deterministically exercising the
+    no-token-found path."""
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not logged in")
     runner = CliRunner()
     result = runner.invoke(
         main,
@@ -322,6 +328,8 @@ def test_audit_reports_usage_error_when_no_token_configured(mock_client_cls, mon
         ],
     )
     assert result.exit_code == 2
+    assert "no GitHub token" in result.output
+    mock_client_cls.assert_not_called()
     assert "no GitHub token" in result.output
     mock_client_cls.assert_not_called()
 
@@ -787,3 +795,74 @@ def test_resolve_repo_rejects_lookalike_github_hosts(remote_url, monkeypatch):
         mock_run.return_value = MagicMock(returncode=0, stdout=remote_url + "\n", stderr="")
         with pytest.raises(click.ClickException, match="could not determine repository"):
             _resolve_repo(None)
+
+
+def test_resolve_token_prefers_explicit_token_over_gh_cli():
+    with patch("repo_policy.cli.subprocess.run") as mock_run:
+        assert _resolve_token("explicit-token") == "explicit-token"
+        mock_run.assert_not_called()
+
+
+def test_resolve_token_prefers_github_token_env_over_gh_cli(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "env-token")
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    with patch("repo_policy.cli.subprocess.run") as mock_run:
+        assert _resolve_token(None) == "env-token"
+        mock_run.assert_not_called()
+
+
+def test_resolve_token_prefers_gh_token_env_over_gh_cli(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "env-token")
+    with patch("repo_policy.cli.subprocess.run") as mock_run:
+        assert _resolve_token(None) == "env-token"
+        mock_run.assert_not_called()
+
+
+def test_resolve_token_falls_back_to_gh_cli_when_nothing_else_set(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    with patch("repo_policy.cli.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="gho_fromghcli\n", stderr="")
+        assert _resolve_token(None) == "gho_fromghcli"
+        mock_run.assert_called_once_with(
+            ["gh", "auth", "token"], capture_output=True, text=True, check=False
+        )
+
+
+def test_resolve_token_raises_when_gh_cli_not_logged_in(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    with patch("repo_policy.cli.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not logged in")
+        with pytest.raises(click.ClickException, match="no GitHub token found"):
+            _resolve_token(None)
+
+
+def test_resolve_token_raises_when_gh_binary_is_missing(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    with (
+        patch("repo_policy.cli.subprocess.run", side_effect=FileNotFoundError("gh not found")),
+        pytest.raises(click.ClickException, match="no GitHub token found"),
+    ):
+        _resolve_token(None)
+
+
+def test_resolve_token_strips_trailing_whitespace_from_gh_cli_output(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    with patch("repo_policy.cli.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="gho_fromghcli\n\n", stderr="")
+        assert _resolve_token(None) == "gho_fromghcli"
+
+
+def test_resolve_token_raises_when_gh_cli_succeeds_but_prints_nothing(monkeypatch):
+    """A zero exit code alone isn't proof of a usable token -- an empty stdout must still fall
+    through to the same error as gh not being logged in, not resolve to an empty-string token."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    with patch("repo_policy.cli.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="\n", stderr="")
+        with pytest.raises(click.ClickException, match="no GitHub token found"):
+            _resolve_token(None)
