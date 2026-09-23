@@ -21,6 +21,11 @@ name: Docs
 # That trades away the engine's "fixes land with no version bump" model for
 # this repo's docs build specifically: bumping the pin below is now a manual
 # step here whenever an upstream engine fix is needed.
+#
+# shipsolid/docs-site must stay public for the `uses:` call below to resolve
+# at all — confirmed the hard way: every run failed with "workflow was not
+# found" while it was private, for this repo and for every other consumer,
+# silently, since nothing else in this pipeline depended on it succeeding.
 
 on:
   push:
