@@ -14,11 +14,13 @@ name: Docs
 #     It does not deploy; Cloudflare's own build does that, publishing to
 #     https://repo-policy.shipsolid.workers.dev/. Worker config: wrangler.jsonc.
 #
-# @main on the reusable workflow is deliberate — this org owns
-# shipsolid/docs-site and every consumer tracks its main so engine fixes land
-# without a version bump here. The guard against a breaking change is the
-# engine repo's own CI, which runs its end-to-end fixture build
-# (tests/fixture-build.test.mjs) on every change there.
+# The reusable workflow is hash-pinned, not tracked at @main as
+# shipsolid/docs-site's own README recommends for consumers — this repo's
+# zizmor policy (see the `security` job in ci.yml) requires every `uses:` in
+# .github/workflows to resolve to a commit SHA, no exceptions configured.
+# That trades away the engine's "fixes land with no version bump" model for
+# this repo's docs build specifically: bumping the pin below is now a manual
+# step here whenever an upstream engine fix is needed.
 
 on:
   push:
@@ -51,7 +53,7 @@ jobs:
       contents: read
       pages: write
       id-token: write
-    uses: shipsolid/docs-site/.github/workflows/build-deploy.yml@main
+    uses: shipsolid/docs-site/.github/workflows/build-deploy.yml@4ec7cfc7b728bc0dbb9113f1993dc050729f5565 # main
     with:
       # Deploy to Pages only on push to main; PRs and manual dispatch just build.
       deploy: ${{ github.event_name == 'push' }}
@@ -61,7 +63,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Build docs (Cloudflare config) — build-check only, Cloudflare deploys via its own Git integration
         env:
