@@ -1,4 +1,6 @@
-# Release Readiness: v1 Audit-Remediation Plan
+---
+title: "Release Readiness: v1 Audit-Remediation Plan"
+---
 
 **Verification date:** 2026-09-21
 **Verified by:** Task 14 of the audit-remediation plan (`repo-policy-audit-remediation-plan.md`)

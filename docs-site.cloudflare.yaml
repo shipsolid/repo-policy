@@ -1,0 +1,21 @@
+# Cloudflare Workers variant of docs-site.yaml — same content policy, root
+# base path for domain-root serving at https://repo-policy.shipsolid.workers.dev/.
+# Used only by scripts/build-docs.sh (the build command Cloudflare's native Git
+# integration runs); the GitHub Pages job in .github/workflows/docs.yml reads
+# docs-site.yaml instead. Keep title/description/nav in sync with that file —
+# only `base` should differ.
+title: repo-policy
+description: >-
+  Lightweight, declarative repository governance for GitHub — branch
+  protection and ruleset configuration as YAML, audited and applied locally
+  or in CI.
+
+base: /
+
+social:
+  github: https://github.com/shipsolid/repo-policy
+
+nav:
+  - { label: Architecture, dir: adrs }
+  - { label: Guides, items: [ci-cd, test-strategy, troubleshooting, release-readiness-v1] }
+  - { label: Reference, items: [project-readme] }

@@ -1,4 +1,6 @@
-# CI/CD Pipeline
+---
+title: CI/CD Pipeline
+---
 
 ## Pipeline Architecture
 

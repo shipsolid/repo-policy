@@ -1,0 +1,23 @@
+# Consumer contract for the shared shipsolid/docs-site bespoke Astro engine. This
+# repository owns content and navigation policy only; theme/build implementation
+# remains in the shared engine invoked by .github/workflows/docs.yml.
+#
+# This config drives the GitHub Pages build (base defaults to /repo-policy/,
+# a project-page subpath). Cloudflare Workers deployment at
+# https://repo-policy.shipsolid.workers.dev/ (domain root) uses the sibling
+# docs-site.cloudflare.yaml instead — the engine bakes a single `base` path
+# into each Astro build, so the two targets need separate configs. Keep both
+# files' title/description/nav in sync; only `base` should differ.
+title: repo-policy
+description: >-
+  Lightweight, declarative repository governance for GitHub — branch
+  protection and ruleset configuration as YAML, audited and applied locally
+  or in CI.
+
+social:
+  github: https://github.com/shipsolid/repo-policy
+
+nav:
+  - { label: Architecture, dir: adrs }
+  - { label: Guides, items: [ci-cd, test-strategy, troubleshooting, release-readiness-v1] }
+  - { label: Reference, items: [project-readme] }

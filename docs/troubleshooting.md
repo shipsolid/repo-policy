@@ -1,11 +1,14 @@
-# Troubleshooting
+---
+title: Troubleshooting
+---
 
 ## `Error: no GitHub token found; pass --token, set GITHUB_TOKEN/GH_TOKEN, or run gh auth login`
 
 No token was found in `--token`, `GITHUB_TOKEN`, or `GH_TOKEN` — and either the `gh` CLI isn't
 installed, or `gh auth token` failed (not logged in, or logged into the wrong host). Set one of
-the first three explicitly, or run `gh auth login` and try again. See [SECURITY.md](../SECURITY.md)
-for the required token permissions and what the `gh auth token` fallback trusts.
+the first three explicitly, or run `gh auth login` and try again. See
+[SECURITY.md](https://github.com/shipsolid/repo-policy/blob/main/SECURITY.md) for the required
+token permissions and what the `gh auth token` fallback trusts.
 
 ## `GitHub API error 403 ... Resource not accessible by integration` (inside a GitHub Action)
 

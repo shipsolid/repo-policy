@@ -1,4 +1,6 @@
-# Test Strategy
+---
+title: Test Strategy
+---
 
 ## Test Pyramid
 
