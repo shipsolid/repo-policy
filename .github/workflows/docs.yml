@@ -58,7 +58,8 @@ jobs:
       contents: read
       pages: write
       id-token: write
-    uses: shipsolid/docs-site/.github/workflows/build-deploy.yml@fbd7c5fb32316afc5ef72f439d25c3f6b8e6841b # main
+    secrets: inherit
+    uses: shipsolid/docs-site/.github/workflows/build-deploy.yml@15d0e4fadafcb50f8d9fc18f091bd1779f40b255 # main
     with:
       # Deploy to Pages only on push to main; PRs and manual dispatch just build.
       deploy: ${{ github.event_name == 'push' }}
@@ -75,4 +76,10 @@ jobs:
       - name: Build docs (Cloudflare config) — build-check only, Cloudflare deploys via its own Git integration
         env:
           REPO_SLUG: ${{ github.repository }}
+          # Exercised here so CI catches a real regression, not just a
+          # hardcoded-test-value one — Cloudflare's own build additionally
+          # needs these same two set in its own dashboard (Variables and
+          # secrets), a separate system GitHub secrets don't reach.
+          PUBLIC_FARO_COLLECTOR_URL: ${{ secrets.PUBLIC_FARO_COLLECTOR_URL }}
+          PUBLIC_GA4_ID: ${{ secrets.PUBLIC_GA4_ID }}
         run: bash scripts/build-docs.sh
