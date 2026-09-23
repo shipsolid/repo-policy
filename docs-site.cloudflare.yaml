@@ -15,7 +15,34 @@ base: /
 social:
   github: https://github.com/shipsolid/repo-policy
 
+# Keep in sync with docs-site.yaml's root_docs/nav — see that file's comment.
+root_docs:
+  - ARCHITECTURE.md
+  - CHANGELOG.md
+  - { path: CODE_OF_CONDUCT.md, title: Code of Conduct }
+  - CONTRIBUTING.md
+  - { path: FAQ.md, title: FAQ }
+  - ROADMAP.md
+  - SECURITY.md
+  - SUPPORT.md
+  - USAGE.md
+  - { path: usecases.md, title: Use Cases }
+
 nav:
   - { label: Architecture, dir: adrs }
   - { label: Guides, items: [ci-cd, test-strategy, troubleshooting, release-readiness-v1] }
-  - { label: Reference, items: [project-readme] }
+  - label: Reference
+    items:
+      [
+        project-readme,
+        architecture,
+        usage,
+        faq,
+        usecases,
+        roadmap,
+        changelog,
+        contributing,
+        code-of-conduct,
+        security,
+        support,
+      ]

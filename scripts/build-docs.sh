@@ -17,6 +17,7 @@ npm ci
 
 export DOCS_SRC="$OLDPWD/docs"
 export PROJECT_README="$OLDPWD/README.md"
+export REPO_ROOT="$OLDPWD"
 export DOCS_SITE_CONFIG="$OLDPWD/docs-site.cloudflare.yaml"
 export REPO_SLUG="${REPO_SLUG:?REPO_SLUG must be set}"
 

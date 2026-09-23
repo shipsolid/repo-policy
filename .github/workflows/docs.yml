@@ -53,7 +53,7 @@ jobs:
       contents: read
       pages: write
       id-token: write
-    uses: shipsolid/docs-site/.github/workflows/build-deploy.yml@4ec7cfc7b728bc0dbb9113f1993dc050729f5565 # main
+    uses: shipsolid/docs-site/.github/workflows/build-deploy.yml@6a91d2b328c7f9e4a56ded2517e05e7847938722 # main
     with:
       # Deploy to Pages only on push to main; PRs and manual dispatch just build.
       deploy: ${{ github.event_name == 'push' }}

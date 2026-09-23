@@ -17,7 +17,38 @@ description: >-
 social:
   github: https://github.com/shipsolid/repo-policy
 
+# README.md is already covered by project_readme (default) -> slug
+# `project-readme`; everything else at the repo root that isn't part of
+# docs/ goes through root_docs instead. Slug = lowercased filename, `.md`
+# dropped, `_` -> `-` (CODE_OF_CONDUCT.md -> code-of-conduct); title
+# auto-derives from that unless overridden below.
+root_docs:
+  - ARCHITECTURE.md
+  - CHANGELOG.md
+  - { path: CODE_OF_CONDUCT.md, title: Code of Conduct }
+  - CONTRIBUTING.md
+  - { path: FAQ.md, title: FAQ }
+  - ROADMAP.md
+  - SECURITY.md
+  - SUPPORT.md
+  - USAGE.md
+  - { path: usecases.md, title: Use Cases }
+
 nav:
   - { label: Architecture, dir: adrs }
   - { label: Guides, items: [ci-cd, test-strategy, troubleshooting, release-readiness-v1] }
-  - { label: Reference, items: [project-readme] }
+  - label: Reference
+    items:
+      [
+        project-readme,
+        architecture,
+        usage,
+        faq,
+        usecases,
+        roadmap,
+        changelog,
+        contributing,
+        code-of-conduct,
+        security,
+        support,
+      ]
