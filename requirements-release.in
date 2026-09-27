@@ -6,4 +6,4 @@
 # python-semantic-release is a build-time tool for this repo's own release job, not something
 # repo-policy itself depends on -- so there is no pyproject.toml cross-check here, only the
 # regenerate-and-diff half of the pattern. See scripts/verify-release-lock.sh.
-python-semantic-release==9.21.2
+python-semantic-release==10.6.2
