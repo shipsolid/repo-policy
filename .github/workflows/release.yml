@@ -303,7 +303,7 @@ jobs:
 
       - name: Upload distribution artifacts
         if: steps.release.outputs.released == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
@@ -612,7 +612,7 @@ jobs:
       id-token: write # OIDC trusted publishing to PyPI; this job never touches repo contents
     steps:
       - name: Download distribution artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
@@ -653,7 +653,7 @@ jobs:
           python-version: "3.12"
 
       - name: Download distribution artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
@@ -720,7 +720,7 @@ jobs:
       # same way `release` hands `dist/` to `publish` -- a workflow artifact, not a shared
       # checkout, so no single job ever holds both repo-write and OIDC-mint capability.
       - name: Upload SBOMs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sboms
           path: |
@@ -742,7 +742,7 @@ jobs:
       contents: write # gh release upload, to attach the SBOMs to the GitHub release
     steps:
       - name: Download SBOMs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sboms
 
