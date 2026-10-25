@@ -1,9 +1,9 @@
 name: CI
 
 on:
-  pull_request:
-  push:
-    branches: [main]
+  # pull_request:
+  # push:
+  #   branches: [main]
   # Lets release.yml depend on this exact job graph as a same-workflow-run dependency (needs: ci)
   # instead of trusting a separately-triggered workflow's completion after the fact. Purely
   # additive: doesn't change the pull_request/push behavior above.

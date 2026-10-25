@@ -14,8 +14,9 @@ name: Release
 # in the same workflow run as the release job, on the same commit, with no separate event to
 # validate. See docs/ci-cd.md for the full rationale.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
 
 # Serialize the whole release pipeline: two rapid pushes to main must queue and finish in order,
 # never race on the same version/tag/PyPI state. Queued runs are kept (not cancelled) so no
