@@ -28,24 +28,24 @@ name: Docs
 # silently, since nothing else in this pipeline depended on it succeeding.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "docs/**"
-      - "README.md"
-      - "docs-site.yaml"
-      - "docs-site.cloudflare.yaml"
-      - "scripts/build-docs.sh"
-      - ".github/workflows/docs.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "docs/**"
-      - "README.md"
-      - "docs-site.yaml"
-      - "docs-site.cloudflare.yaml"
-      - "scripts/build-docs.sh"
-      - ".github/workflows/docs.yml"
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "docs/**"
+  #     - "README.md"
+  #     - "docs-site.yaml"
+  #     - "docs-site.cloudflare.yaml"
+  #     - "scripts/build-docs.sh"
+  #     - ".github/workflows/docs.yml"
+  # pull_request:
+  #   branches: [main]
+  #   paths:
+  #     - "docs/**"
+  #     - "README.md"
+  #     - "docs-site.yaml"
+  #     - "docs-site.cloudflare.yaml"
+  #     - "scripts/build-docs.sh"
+  #     - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 concurrency:

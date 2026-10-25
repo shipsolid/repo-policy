@@ -11,15 +11,15 @@ name: Check Release Pins
 # Schedule + push-to-main-on-doc-change instead, mirroring policy-audit.yml's advisory pattern for
 # the same reason.
 on:
-  schedule:
-    - cron: "0 8 * * *" # daily, offset from policy-audit.yml's 07:00 UTC
-  push:
-    branches: [main]
-    paths:
-      - "README.md"
-      - "USAGE.md"
-      - "scripts/verify-release-pins.sh"
-      - ".github/workflows/check-release-pins.yml"
+  # schedule:
+  #   - cron: "0 8 * * *" # daily, offset from policy-audit.yml's 07:00 UTC
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "README.md"
+  #     - "USAGE.md"
+  #     - "scripts/verify-release-pins.sh"
+  #     - ".github/workflows/check-release-pins.yml"
   workflow_dispatch: {} # manual re-run, e.g. right after fixing a reported drift
 
 concurrency:

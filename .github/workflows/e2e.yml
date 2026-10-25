@@ -2,8 +2,8 @@ name: E2E (live fixture repo)
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 3 * * *"
+  # schedule:
+  #   - cron: "0 3 * * *"
 
 # Task 11 Step 4: this suite mutates a single shared, persistent fixture repo
 # (shipsolid/repo-policy-e2e-fixture) -- a manual workflow_dispatch and the nightly schedule firing

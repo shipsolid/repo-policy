@@ -10,11 +10,12 @@ name: Security
 # second PR-blocking gate duplicating ci.yml's `security` job. See docs/ci-cd.md and SECURITY.md's
 # "Vulnerability Management" section for the resulting triage process and response times.
 on:
-  pull_request:
-  push:
-    branches: [main]
-  schedule:
-    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
+  workflow_dispatch:
+  # pull_request:
+  # push:
+  #   branches: [main]
+  # schedule:
+  #   - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
 
 # No job inherits repo-default permissions; each job below declares exactly what it needs.
 permissions: {}

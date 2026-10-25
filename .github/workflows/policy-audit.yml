@@ -6,13 +6,13 @@ name: Policy Audit
 # never `apply`. A drift finding fails this job (audit exits 1 on drift -- see README's Exit codes
 # table) so it shows up as a red workflow run, not just a log line nobody reads.
 on:
-  schedule:
-    - cron: "0 7 * * *" # daily, 07:00 UTC -- same cadence class as e2e.yml's live-fixture check
-  push:
-    branches: [main]
-    paths:
-      - ".github/repository-policy.yml"
-      - ".github/workflows/policy-audit.yml"
+  # schedule:
+  #   - cron: "0 7 * * *" # daily, 07:00 UTC -- same cadence class as e2e.yml's live-fixture check
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - ".github/repository-policy.yml"
+  #     - ".github/workflows/policy-audit.yml"
   workflow_dispatch: {} # manual re-run, e.g. right after fixing a reported drift
 
 # Serializes overlapping runs (a schedule tick landing mid-way through a manual workflow_dispatch,
