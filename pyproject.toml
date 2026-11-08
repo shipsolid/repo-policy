@@ -23,11 +23,11 @@ dependencies = [
 # changed -- the same failure mode scripts/verify-action-lock.sh guards against for hatchling.
 # Dependabot's weekly pip group (see .github/dependabot.yml) proposes the bumps instead.
 dev = [
-    "pytest==9.1.1",
+    "pytest==9.2.0",
     "pytest-cov==7.1.0",
     "respx==0.23.1",
-    "ruff==0.16.8",
-    "mypy==2.3.1",
+    "ruff==0.17.3",
+    "mypy==2.4.1",
 ]
 
 [project.scripts]
